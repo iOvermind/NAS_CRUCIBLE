@@ -41,8 +41,8 @@ Crucible 是一套硬碟上線前的嚴格測試流程（Burn-in）。它會對�
 確保你已經進入 tmux 或 screen 環境，並確認要測試的硬碟代號（如 `sdb`、`sdc`，不需要加上 `/dev/`）。
 
 ```bash
-chmod +x CDY_TRUENAS.sh
-./CDY_TRUENAS.sh sdb sdc
+chmod +x nas_crucible.sh
+./nas_crucible.sh sdb sdc
 ```
 
 執行後，腳本會列出即將被**全盤抹除**的硬碟型號與序號，需手動輸入 `YES` 才會正式開始。整個流程依硬碟容量可能耗時數天。
