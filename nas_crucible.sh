@@ -26,8 +26,14 @@ if [ -z "$TMUX" ] && [ -z "$STY" ]; then
     exit 1
 fi
 
-if ! command -v jq &> /dev/null; then
-    echo "❌ 錯誤：未安裝 jq。此腳本需要 jq 解析 smartctl JSON 數據。"
+MISSING_PKGS=""
+if ! command -v jq &> /dev/null; then MISSING_PKGS+=" jq"; fi
+if ! command -v smartctl &> /dev/null; then MISSING_PKGS+=" smartmontools"; fi
+if ! command -v badblocks &> /dev/null; then MISSING_PKGS+=" e2fsprogs"; fi
+
+if [ -n "$MISSING_PKGS" ]; then
+    echo "❌ 靠背，缺乏必要的套件！請複製並執行以下指令安裝："
+    echo "sudo apt update && sudo apt install$MISSING_PKGS"
     exit 1
 fi
 
