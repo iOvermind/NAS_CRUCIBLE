@@ -43,6 +43,7 @@ Crucible 是一套硬碟上線前的嚴格測試流程（Burn-in）。它會對�
 ```bash
 chmod +x CDY_TRUENAS.sh
 ./CDY_TRUENAS.sh sdb sdc
+```
 
 執行後，腳本會列出即將被**全盤抹除**的硬碟型號與序號，需手動輸入 `YES` 才會正式開始。整個流程依硬碟容量可能耗時數天。
 
