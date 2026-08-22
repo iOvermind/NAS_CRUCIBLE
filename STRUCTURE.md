@@ -46,7 +46,7 @@ graph TD
     CLI -->|3. 產出 manifest 並呼叫| CTRL
     
     CTRL -->|4. 為每個 ALLOW 裝置 setsid fork| RUN
-    CTRL -.->|中斷時發送 SIGTERM (Global Abort)| RUN
+    CTRL -.->|"中斷時發送 SIGTERM (Global Abort)"| RUN
     
     RUN -->|5a. 執行 OS 探針| PRE
     RUN -->|5b. 擷取快照| SNP
