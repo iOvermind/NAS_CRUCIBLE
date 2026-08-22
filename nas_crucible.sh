@@ -6,7 +6,8 @@
 
 DRIVES=("$@")
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-LOG_DIR="/root/burnin_logs_$TIMESTAMP"
+# 改存在當前目錄 (加上時間戳資料夾，避免檔案太亂)
+LOG_DIR="./burnin_logs_$TIMESTAMP"
 
 if [ ${#DRIVES[@]} -eq 0 ]; then
     echo "❌ 錯誤：未提供硬碟代號！"
