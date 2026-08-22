@@ -1,16 +1,10 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/device_probe.sh"
 # =========================================================================
 # M2A-3B: SMART Long Adapter (Device-driven 觀測與中止邊界)
 # =========================================================================
 
 # --- 獨立模組: 基礎設施防護 ---
-_smart_is_device_accessible() {
-    local dev=$1
-    [ -b "/dev/$dev" ] || return 1
-    [ -e "/sys/class/block/$dev/device" ] || return 1
-    smartctl -i "/dev/$dev" >/dev/null 2>&1 || return 1
-    return 0 
-}
 
 # --- 獨立模組: SMART Polling State Parsers ---
 _parse_ata_poll_state() {
@@ -55,7 +49,7 @@ smartctl_long_adapter() {
     if [ "$exec_rc" -eq 0 ]; then
         while true; do
             [ -n "$abort_signal" ] && { poll_state="INTERRUPTED"; break; }
-            if ! _smart_is_device_accessible "$dev"; then exec_rc=999; poll_state="ERROR"; break; fi
+            if ! is_device_accessible "$dev"; then exec_rc=999; poll_state="ERROR"; break; fi
             if [ "$elapsed" -ge "$timeout_sec" ]; then
                 timeout_triggered="true"; abort_req="true"; poll_state="TIMEOUT"
                 smartctl -X "/dev/$dev" >/dev/null 2>&1; abort_rc=$?; break
@@ -83,7 +77,7 @@ smartctl_long_adapter() {
 
     trap - INT TERM
 
-    if _smart_is_device_accessible "$dev" && [ -z "$abort_signal" ] && [ "$timeout_triggered" != "true" ] && [ "$exec_rc" -eq 0 ]; then
+    if is_device_accessible "$dev" && [ -z "$abort_signal" ] && [ "$timeout_triggered" != "true" ] && [ "$exec_rc" -eq 0 ]; then
         smartctl -j -l selftest "/dev/$dev" > "$result_log" 2>&1
         local ata_status scsi_status
         ata_status=$(jq -r '.ata_smart_data.self_test_log.standard.table[0].status.string // empty' "$result_log" 2>/dev/null)
@@ -96,7 +90,7 @@ smartctl_long_adapter() {
     elif [ "$exec_rc" -eq 999 ]; then final_rc=2; reason="INFRASTRUCTURE_DEVICE_LOST_OR_TRANSPORT_BROKEN"
     elif [ "$exec_rc" -eq 888 ]; then final_rc=2; reason="SMART_STATUS_UNPARSEABLE"
     elif [ "$exec_rc" -ne 0 ]; then
-        if ! _smart_is_device_accessible "$dev"; then final_rc=2; reason="INFRASTRUCTURE_DEVICE_LOST_OR_TRANSPORT_BROKEN"
+        if ! is_device_accessible "$dev"; then final_rc=2; reason="INFRASTRUCTURE_DEVICE_LOST_OR_TRANSPORT_BROKEN"
         elif [ "$exec_rc" -eq 127 ]; then final_rc=2; reason="EXECUTOR_NOT_FOUND"
         else final_rc=1; reason="WORKLOAD_COMMAND_FAILED"; fi
     else final_rc=0; reason="COMPLETED_SUCCESSFULLY"; fi

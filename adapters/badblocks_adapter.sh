@@ -1,14 +1,8 @@
 #!/bin/bash
+source "$(dirname "${BASH_SOURCE[0]}")/../lib/device_probe.sh"
 # =========================================================================
 # M2A-3A: Badblocks Adapter (Host-driven PGID 隔離邊界)
 # =========================================================================
-_bb_is_device_accessible() {
-    local dev=$1
-    [ -b "/dev/$dev" ] || return 1
-    [ -e "/sys/class/block/$dev/device" ] || return 1
-    smartctl -i "/dev/$dev" >/dev/null 2>&1 || return 1
-    return 0 
-}
 
 badblocks_adapter() {
     local dev=$1 serial=$2 log_dir=$3 timeout_sec=${4:-302400}
@@ -47,7 +41,7 @@ badblocks_adapter() {
     elif [ "$timeout_triggered" == "true" ]; then final_rc=2; reason="WORKLOAD_TIMEOUT_OR_ENVIRONMENT_FAILURE"
     elif [ "$raw_rc" -eq 0 ]; then final_rc=0; reason="WORKLOAD_COMPLETED"
     elif [ "$raw_rc" -eq 1 ]; then
-        if ! _bb_is_device_accessible "$dev"; then final_rc=2; reason="INFRASTRUCTURE_DEVICE_LOST_OR_TRANSPORT_BROKEN"
+        if ! is_device_accessible "$dev"; then final_rc=2; reason="INFRASTRUCTURE_DEVICE_LOST_OR_TRANSPORT_BROKEN"
         else final_rc=1; reason="WORKLOAD_FAILED"; fi
     else
         final_rc=2

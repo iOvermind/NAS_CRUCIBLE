@@ -2,6 +2,48 @@
   "name": "SAS_HDD_DESTRUCTIVE_BURNIN",
   "version": "1.0",
   "execution_profile": "HDD_FULL_BURNIN",
-  "required_host_capabilities": ["badblocks"],
-  "required_device_capabilities": []
+  "phases": {
+    "badblocks": { "enabled": true, "timeout": 302400 },
+    "smart_long": { "timeout": 86400 }
+  },
+  "verdict_rules": [
+    {
+      "name": "smart_health",
+      "jq_path": ".smart_status.passed",
+      "check": "equals",
+      "expected": true,
+      "on_missing": "FAIL",
+      "fail_reason": "整體健康評估不合格"
+    },
+    {
+      "name": "grown_defect_list",
+      "jq_path": ".scsi_grown_defect_list",
+      "check": "equals",
+      "expected": 0,
+      "on_missing": "FAIL",
+      "fail_reason": "發現 Grown Defect (SAS 壞軌)"
+    },
+    {
+      "name": "read_errors_growth",
+      "jq_path": ".scsi_error_counter_log.read.total_errors_corrected",
+      "check": "no_growth",
+      "on_missing": "PASS",
+      "fail_reason": "讀取錯誤增加"
+    },
+    {
+      "name": "write_errors_growth",
+      "jq_path": ".scsi_error_counter_log.write.total_errors_corrected",
+      "check": "no_growth",
+      "on_missing": "PASS",
+      "fail_reason": "寫入錯誤增加"
+    },
+    {
+      "name": "temperature_ceiling",
+      "jq_path": ".temperature.current",
+      "check": "max",
+      "expected": 60,
+      "on_missing": "PASS",
+      "fail_reason": "測試後溫度異常偏高"
+    }
+  ]
 }

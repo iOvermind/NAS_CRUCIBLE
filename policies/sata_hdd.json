@@ -2,6 +2,64 @@
   "name": "SATA_HDD_DESTRUCTIVE_BURNIN",
   "version": "1.0",
   "execution_profile": "HDD_FULL_BURNIN",
-  "required_host_capabilities": ["badblocks"],
-  "required_device_capabilities": []
+  "phases": {
+    "badblocks": { "enabled": true, "timeout": 302400 },
+    "smart_long": { "timeout": 86400 }
+  },
+  "verdict_rules": [
+    {
+      "name": "smart_health",
+      "jq_path": ".smart_status.passed",
+      "check": "equals",
+      "expected": true,
+      "on_missing": "FAIL",
+      "fail_reason": "整體健康評估不合格"
+    },
+    {
+      "name": "reallocated_sectors",
+      "jq_path": ".ata_smart_attributes.table[]? | select(.id == 5) | .raw.value",
+      "check": "equals",
+      "expected": 0,
+      "on_missing": "FAIL",
+      "fail_reason": "發現實體壞軌(ID_5)"
+    },
+    {
+      "name": "current_pending",
+      "jq_path": ".ata_smart_attributes.table[]? | select(.id == 197) | .raw.value",
+      "check": "equals",
+      "expected": 0,
+      "on_missing": "FAIL",
+      "fail_reason": "發現潛在壞軌(ID_197)"
+    },
+    {
+      "name": "offline_uncorrectable",
+      "jq_path": ".ata_smart_attributes.table[]? | select(.id == 198) | .raw.value",
+      "check": "equals",
+      "expected": 0,
+      "on_missing": "FAIL",
+      "fail_reason": "無法修復壞軌(ID_198)"
+    },
+    {
+      "name": "crc_error_growth",
+      "jq_path": ".ata_smart_attributes.table[]? | select(.id == 199) | .raw.value",
+      "check": "no_growth",
+      "on_missing": "FAIL",
+      "fail_reason": "傳輸錯誤增加(排線或介面異常)"
+    },
+    {
+      "name": "error_log_growth",
+      "jq_path": ".ata_smart_error_log.summary.count // empty",
+      "check": "no_growth",
+      "on_missing": "FAIL",
+      "fail_reason": "硬碟內部記錄到新錯誤"
+    },
+    {
+      "name": "temperature_ceiling",
+      "jq_path": ".temperature.current",
+      "check": "max",
+      "expected": 60,
+      "on_missing": "PASS",
+      "fail_reason": "測試後溫度異常偏高"
+    }
+  ]
 }

@@ -1,65 +1,40 @@
-# 硬碟入池驗收工具
+# NAS_CRUCIBLE (儲存裝置破壞性測試框架)
 
-> 《硬碟入池驗收工具》針對 SATA 傳統硬碟設計的破壞性驗收腳本。透過自動化全盤抹寫與嚴格的 SMART 檢測，剔除帶有暗傷的硬碟，確保 Zpool 的資料安全。
+NAS_CRUCIBLE 是一個全自動、Fail-Closed 的儲存裝置破壞性燒機 (Burn-in) 測試框架。旨在為 NAS 或伺服器建置前，對全新的硬碟進行最嚴格的物理壓力測試，找出潛在的故障品 (Infant Mortality)。
 
-## 1. 這是什麼 / 能做什麼
+## ⚠️ 警告：破壞性測試
+本工具包含 `badblocks -wsv` 全盤寫入測試。**將會無條件抹除硬碟上的所有資料！** 絕對不可以在存有重要資料的硬碟上執行。
 
-Crucible 是一套硬碟上線前的嚴格測試流程（Burn-in）。它會對硬碟執行高強度的實體壓力測試，並在測試前後擷取狀態進行比對。
+## 支援的硬體
+- SATA HDD (完整支援)
+- SAS HDD (完整支援)
+- SATA SSD / SAS SSD (透過策略跳過抹除，僅測試)
+- NVMe SSD (規劃中)
 
-主要功能與驗收標準：
-- **環境防呆**：自動阻擋已掛載或存在於活躍 ZFS Pool 中的硬碟，防止誤殺。
-- **實體破壞性測試**：透過 `badblocks -wsv` 執行全盤四次覆寫與讀取測試。
-- **嚴格驗收（Fail-Closed）**：只要出現以下任一情況即判定不合格（FAIL）：
-  - SMART 總體健康狀態異常
-  - 出現壞軌（Reallocated Sector 或 Pending Sector 大於 0）
-  - 出現離線無法修復區塊（Offline Uncorrectable 大於 0）
-  - 測試前後的 CRC 錯誤次數增加
-  - 測試前後的 SMART Error Log 筆數增加
-  - SMART Long Test 或 badblocks 執行過程異常或中斷
-
-## 2. 取得與安裝
-
-本腳本為單一 Bash 檔案，無需編譯即可執行。不適用於 SAS 或 NVMe 磁碟。
-
-**環境需求**：
-- Linux 作業系統（如 TrueNAS SCALE 或 Debian/Ubuntu）
-- 必須以 `root` 權限執行
-- 必須安裝 `jq` 套件
-- 必須在 `tmux` 或 `screen` 環境中執行，避免斷線導致測試中斷
-
-**相容性對照**：
-
-| 介面 / 類型 | 支援狀態 | 說明 |
-| :--- | :--- | :--- |
-| SATA HDD | 支援 | 本腳本專為 SATA 傳統硬碟設計 |
-| SATA SSD | 不建議 | 破壞性覆寫會過度消耗 SSD 壽命 |
-| SAS HDD / SSD | 不支援 | 底層通訊與錯誤紀錄判定邏輯不同 |
-| NVMe SSD | 不支援 | 採用的 SMART 屬性定義完全不同 |
-
-## 3. 快速開始
-
-確保你已經進入 tmux 或 screen 環境，並確認要測試的硬碟代號（如 `sdb`、`sdc`，不需要加上 `/dev/`）。
+## 系統需求
+- Linux (Debian/Ubuntu 推薦)
+- 必須以 `root` 身分執行
+- 必須在 `tmux` 或 `screen` 中執行 (測試需耗時 3-5 天)
+- 依賴套件: `smartmontools`, `e2fsprogs`, `jq`
 
 ```bash
-chmod +x nas_crucible.sh
-./nas_crucible.sh sdb sdc
+apt install smartmontools e2fsprogs jq
 ```
 
-執行後，腳本會列出即將被**全盤抹除**的硬碟型號與序號，需手動輸入 `YES` 才會正式開始。整個流程依硬碟容量可能耗時數天。
+## 使用方式
 
-## 4. 常見問題 / 疑難排解
+1. 確保所有要測試的硬碟是**全新或已備份**的，且**尚未被掛載**。
+2. 啟動 tmux:
+   ```bash
+   tmux new -s burnin
+   ```
+3. 執行測試腳本，傳入硬碟代號 (不含 `/dev/`)：
+   ```bash
+   sudo ./crucible.sh sdb sdc sdd
+   ```
+4. 腳本會自動檢驗硬碟身分、匹配對應的測試策略，並要求你輸入 `YES` 確認。
+5. 測試啟動後，可以放著讓它跑 (通常需數天)。你可以隨時 detach (`Ctrl+b`, `d`)。
+6. 測試完成後會印出最終表格，所有測試紀錄與 JSON 證據皆會保存在 `burnin_logs_<timestamp>/` 目錄中。
 
-- **顯示「必須在 tmux 或 screen 環境下執行」被拒絕？**
-  這項測試通常需要跑好幾天，為了防止 SSH 斷線導致進度消失，腳本強制要求使用終端機多工器。請輸入 `tmux` 啟動環境後再執行腳本。
-- **顯示硬碟「目前被 OS 掛載」或「出現於活躍的 ZFS Pool」？**
-  腳本內建安全機制。如果你確定要抹除該硬碟，請先從 TrueNAS 介面將該 Pool 匯出（Export/Disconnect），或手動卸載分割區。
-- **最後判定 FAIL，括號內的 `RC:日誌新增錯誤` 等文字是什麼意思？**
-  這是 `smartctl` 的底層狀態碼。原本底層會回傳如 `64` 等二進位數字，腳本已自動將其翻譯為易讀的中文（例如 `64` 即代表 Error Log 記錄到新錯誤）。若要追查詳細的死因，請至當前目錄的 `./burnin_logs_<時間戳>` 資料夾下查看對應硬碟的 JSON 與 log 實體檔案。
-
-## 5. 授權
-
-請注意**本腳本具備資料破壞性**，本軟體依 GPLv3 條款「現狀（AS-IS）」提供，作者對任何資料遺失或硬體損壞不承擔任何法律與擔保責任。詳細條款請參閱 [LICENSE](LICENSE) 檔案。
-
-## 6. 開發者入口
-
-想了解如何建置開發環境、修改程式碼、執行測試或了解架構決策，請參閱 [DEVELOPER.md](DEVELOPER.md)。
+## 開發與維護
+如需了解系統架構或進行擴充，請參閱 [DEVELOPER.md](DEVELOPER.md)。

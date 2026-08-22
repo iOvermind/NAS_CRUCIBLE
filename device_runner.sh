@@ -1,26 +1,24 @@
 #!/bin/bash
 set -u
 
-if [ "$#" -ne 6 ]; then
-  echo "INVALID_RUNNER_ARGUMENTS: expected 6, got $#" >&2
+if [ "$#" -ne 5 ]; then
+  echo "INVALID_RUNNER_ARGUMENTS: expected 5, got $#" >&2
   exit 2
 fi
 
 SERIAL=$1
 DEV=$2
-PROFILE=$3
-POL_NAME=$4
-POL_VER=$5
-PROTOCOL=$6
+PROTOCOL=$3
+POLICY_FILE=$4
+LOG_DIR=$5
 
 [ "$EUID" -eq 0 ] || exit 2
-[ "$PROFILE" = "HDD_FULL_BURNIN" ] || exit 2
 command -v jq >/dev/null 2>&1 || exit 2
 command -v smartctl >/dev/null 2>&1 || exit 2
 case "$PROTOCOL" in ATA|SCSI) ;; *) exit 2;; esac
+[ -f "$POLICY_FILE" ] || exit 2
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-LOG_DIR="$SCRIPT_DIR/logs"
 EXEC_FILE="$LOG_DIR/exec_record_${SERIAL}.json"
 mkdir -p "$LOG_DIR"
 
@@ -28,8 +26,13 @@ source "$SCRIPT_DIR/adapters/precheck_adapter.sh"
 source "$SCRIPT_DIR/adapters/snapshot_adapter.sh"
 source "$SCRIPT_DIR/adapters/smartctl_long_adapter.sh"
 source "$SCRIPT_DIR/adapters/badblocks_adapter.sh"
+source "$SCRIPT_DIR/lib/device_probe.sh"
 
-PHASES=(precheck baseline_snapshot smart_long_1 badblocks smart_long_2 final_snapshot)
+POL_NAME=$(jq -r '.name' "$POLICY_FILE")
+POL_VER=$(jq -r '.version' "$POLICY_FILE")
+PROFILE=$(jq -r '.execution_profile' "$POLICY_FILE")
+
+PHASES=(precheck baseline_snapshot smart_long_1 badblocks smart_long_2 final_snapshot verdict)
 
 jq -n --arg sn "$SERIAL" --arg prof "$PROFILE" --arg pn "$POL_NAME" --arg pv "$POL_VER" \
   '{serial:$sn,execution:{profile:$prof,policy:{name:$pn,version:$pv},status:"STARTING",current_phase:"none",phases:{}}}' > "$EXEC_FILE"
@@ -88,19 +91,50 @@ validate_evidence() {
 
 run_phase() {
   local phase=$1 rc=2 ev_file="$LOG_DIR/${SERIAL}_${phase}_evidence.json"
+  
+  # Check if policy disables this phase
+  local enabled
+  enabled=$(jq -r ".phases.\"$phase\".enabled // true" "$POLICY_FILE")
+  if [ "$enabled" == "false" ]; then
+      update_phase_state "$phase" SKIPPED 0 "DISABLED_BY_POLICY"
+      return 0
+  fi
+
   update_phase_state "$phase" RUNNING
   rm -f "$ev_file"
+  
   case "$phase" in
     precheck) precheck_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR"; rc=$?;;
     baseline_snapshot|final_snapshot) snapshot_adapter "$DEV" "$SERIAL" "$LOG_DIR" "$phase"; rc=$?;;
-    smart_long_1|smart_long_2) smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" "${SMART_LONG_TIMEOUT:-86400}"; rc=$?;;
-    badblocks) badblocks_adapter "$DEV" "$SERIAL" "$LOG_DIR" "${BADBLOCKS_TIMEOUT:-302400}"; rc=$?;;
+    smart_long_1|smart_long_2) 
+        local timeout
+        timeout=$(jq -r ".phases.smart_long.timeout // 86400" "$POLICY_FILE")
+        smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" "$timeout"; rc=$?
+        ;;
+    badblocks) 
+        local timeout
+        timeout=$(jq -r ".phases.badblocks.timeout // 302400" "$POLICY_FILE")
+        badblocks_adapter "$DEV" "$SERIAL" "$LOG_DIR" "$timeout"; rc=$?
+        ;;
+    verdict)
+        "$SCRIPT_DIR/verdict_engine.sh" "$LOG_DIR/${SERIAL}_baseline_snapshot.json" "$LOG_DIR/${SERIAL}_final_snapshot.json" "$POLICY_FILE" > "$ev_file"
+        rc=$?
+        if [ $rc -eq 0 ]; then
+            jq -n --argjson rc $rc --argjson orig "$(<"$ev_file")" '{adapter:{name:"verdict",version:"1.0"}, execution:{status:"COMPLETED",exit_code:$rc,reason:"VERDICT_PASS"}, observation:$orig}' > "${ev_file}.tmp" && mv "${ev_file}.tmp" "$ev_file"
+        elif [ $rc -eq 1 ]; then
+            jq -n --argjson rc $rc --argjson orig "$(<"$ev_file")" '{adapter:{name:"verdict",version:"1.0"}, execution:{status:"FAILED",exit_code:$rc,reason:"VERDICT_FAIL"}, observation:$orig}' > "${ev_file}.tmp" && mv "${ev_file}.tmp" "$ev_file"
+        else
+            jq -n --argjson rc $rc '{adapter:{name:"verdict",version:"1.0"}, execution:{status:"ABORTED",exit_code:$rc,reason:"VERDICT_ENGINE_ERROR"}}' > "${ev_file}.tmp" && mv "${ev_file}.tmp" "$ev_file"
+        fi
+        ;;
     *) update_phase_state "$phase" ABORTED 2 UNKNOWN_PHASE; return 2;;
   esac
+  
   if ! validate_evidence "$ev_file" "$rc"; then
     update_phase_state "$phase" ABORTED 2 ADAPTER_CONTRACT_VIOLATION
     return 2
   fi
+  
   case "$rc" in
     0) update_phase_state "$phase" PASS 0 "$(jq -r '.execution.reason' "$ev_file")";;
     1) update_phase_state "$phase" FAIL 1 "$(jq -r '.execution.reason' "$ev_file")";;
