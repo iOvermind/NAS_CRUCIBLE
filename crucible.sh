@@ -6,8 +6,9 @@ if [ "$EUID" -ne 0 ]; then
     exit 2
 fi
 
-if [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ]; then
+if [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [[ "${TERM:-}" != tmux* ]]; then
     echo "❌ 錯誤: 必須在 tmux 或 screen 內執行，避免連線中斷"
+    echo "💡 提示: 如果你已經在 tmux 內，可能是 sudo 過濾了環境變數。請嘗試加上 -E: sudo -E ./crucible.sh"
     exit 2
 fi
 
