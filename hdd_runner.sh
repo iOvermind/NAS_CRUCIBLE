@@ -1,26 +1,48 @@
 #!/bin/bash
 # =========================================================================
-# 模組: HDD Runner (實體 I/O 整合版)
-# 職責: Policy Admission 驗證、嚴格狀態守衛、Adapter 調用與契約執法
+# 模組: HDD Runner (獨立 Process, 嚴格狀態守衛與實體 Adapter 調用)
 # =========================================================================
+
+# 1. Runner 自身參數防禦 (Defense in Depth)
+if [ "$#" -ne 6 ]; then
+    echo "❌ [Runner] INVALID_RUNNER_ARGUMENTS: Expected 6, got $#"
+    exit 2
+fi
 
 SERIAL=$1
 DEV=$2
 PROFILE=$3
 POL_NAME=$4
 POL_VER=$5
-PROTOCOL=$6 # 由外層傳入，"ATA" 或 "SCSI"
+PROTOCOL=$6
 
-EXEC_FILE="./logs/exec_record_${SERIAL}.json"
+if [ "$PROFILE" != "HDD_FULL_BURNIN" ]; then
+    echo "❌ [Runner $SERIAL] PROFILE_MISMATCH: Expected HDD_FULL_BURNIN, got $PROFILE"
+    exit 2
+fi
 
-# 引入所有實體 Adapter (實務上可透過 source 引入)
-# source ./adapters/precheck_adapter.sh
-# source ./adapters/snapshot_adapter.sh
-# source ./adapters/badblocks_adapter.sh
-# source ./adapters/smartctl_long_adapter.sh
+case "$PROTOCOL" in
+    ATA|SCSI) ;;
+    *)
+        echo "❌ [Runner $SERIAL] UNSUPPORTED_PROTOCOL: $PROTOCOL"
+        exit 2
+        ;;
+esac
+
+# 2. 環境與目錄設定 (絕對路徑化)
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/logs"
+EXEC_FILE="$LOG_DIR/exec_record_${SERIAL}.json"
+mkdir -p "$LOG_DIR"
+
+# 3. 引入真實 Adapter
+source "$SCRIPT_DIR/adapters/precheck_adapter.sh"
+source "$SCRIPT_DIR/adapters/snapshot_adapter.sh"
+source "$SCRIPT_DIR/adapters/smartctl_long_adapter.sh"
+source "$SCRIPT_DIR/adapters/badblocks_adapter.sh"
 
 # =========================================================
-# 📦 Runner 骨架與狀態守衛
+# 📦 Runner 狀態機與守衛
 # =========================================================
 jq -n \
    --arg sn "$SERIAL" \
@@ -97,43 +119,40 @@ handle_interrupt() {
 }
 
 # =========================================================
-# ⚙️ Runner 執行階段 (呼叫真實 Adapter)
+# ⚙️ 執行器 (呼叫真實 Adapter 與契約警察)
 # =========================================================
 run_phase() {
     local phase=$1
     update_phase_state "$phase" "RUNNING"
     
-    # 根據 Phase 名稱 Dispatch 到對應的真實 Adapter
     local rc=2
     case "$phase" in
         "precheck")
-            precheck_adapter "$DEV" "$SERIAL" "./logs"
+            precheck_adapter "$DEV" "$SERIAL" "$LOG_DIR"
             rc=$?
             ;;
         "baseline_snapshot"|"final_snapshot")
-            snapshot_adapter "$DEV" "$SERIAL" "./logs" "$phase"
+            snapshot_adapter "$DEV" "$SERIAL" "$LOG_DIR" "$phase"
             rc=$?
             ;;
         "smart_long_1"|"smart_long_2")
-            # 傳入 $PROTOCOL (ATA/SCSI) 讓 Adapter 正確 Parse
-            smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "./logs" 86400
+            smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" 86400
             rc=$?
             ;;
         "badblocks")
-            # 超時設為 3.5 天
-            badblocks_adapter "$DEV" "$SERIAL" "./logs" 302400
+            badblocks_adapter "$DEV" "$SERIAL" "$LOG_DIR" 302400
             rc=$?
             ;;
     esac
     
-    # 🚔 契約警察：驗證 Evidence 是否合法
-    local ev_file="./logs/${SERIAL}_${phase}_evidence.json"
+    local ev_file="$LOG_DIR/${SERIAL}_${phase}_evidence.json"
     
     if [ ! -f "$ev_file" ] || ! jq empty "$ev_file" >/dev/null 2>&1; then
         update_phase_state "$phase" "ABORTED" 2 "ADAPTER_EVIDENCE_MISSING_OR_INVALID"
         return 2
     fi
 
+    # 嚴格 Schema 驗證
     if ! jq -e '
         has("execution")
         and (.execution | has("status") and (.status | type == "string"))
@@ -154,7 +173,6 @@ run_phase() {
         return 2
     fi
 
-    # 狀態正規化
     case "$rc" in
         0) update_phase_state "$phase" "PASS" 0 "$rsn" ;;
         1) update_phase_state "$phase" "FAIL" 1 "$rsn" ;;
