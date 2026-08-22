@@ -24,7 +24,9 @@ snapshot_adapter() {
     else
         local smart_rc
         smart_rc=$(jq -r '.smartctl.exit_status' "$snap_file")
-        obs_json="{\"smartctl_exit_status\": $smart_rc}"
+        local smart_rc_hex
+        smart_rc_hex=$(printf "0x%02X" "$smart_rc")
+        obs_json="{\"smartctl_exit_status\": $smart_rc, \"smartctl_exit_status_hex\": \"$smart_rc_hex\"}"
         
         # 僅檢查 Bit 0, 1, 2 (通訊與指令異常)
         if [ $((smart_rc & 7)) -ne 0 ]; then
