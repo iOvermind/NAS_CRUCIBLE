@@ -10,3 +10,9 @@
 
 ## 架構與功能擴展
 - [ ] 實作 NVMe SSD 的測試策略與 Adapter (`nvme-cli`)。
+
+## 測試模式擴展
+- [ ] **支援非破壞性檢測模式 (Read-Only / Live Check)**
+  - 目前系統為嚴格的 Fail-Closed 破壞性測試，硬碟若已掛載會被阻擋。
+  - 新增針對「已掛載 (Mounted) 且正在使用中」硬碟的非破壞性 Policy (例如僅擷取快照或執行背景 SMART Long Test，不跑 badblocks)。
+  - 需小心設計，避免非破壞性檢測影響線上服務的 I/O 效能。
