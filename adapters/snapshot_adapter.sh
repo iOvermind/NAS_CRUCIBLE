@@ -1,6 +1,6 @@
 #!/bin/bash
 # =========================================================================
-# M2A-3D: Snapshot Adapter (唯讀快照擷取器 - Bitmask 精準放行)
+# M2A-3D: Snapshot Adapter (唯讀快照擷取器 - 帶 Observation 紀錄)
 # =========================================================================
 snapshot_adapter() {
     local dev=$1
@@ -13,6 +13,7 @@ snapshot_adapter() {
     
     local final_rc=0
     local reason="COMPLETED_SUCCESSFULLY"
+    local obs_json="{}"
 
     # 擷取快照並驗證 JSON
     smartctl -j -x "/dev/$dev" > "$snap_file" 2>/dev/null
@@ -23,29 +24,35 @@ snapshot_adapter() {
     else
         local smart_rc
         smart_rc=$(jq -r '.smartctl.exit_status' "$snap_file")
+        obs_json="{\"smartctl_exit_status\": $smart_rc}"
         
-        # 解析 Bitmask：僅檢查 Bit 0, 1, 2 (Mask 7 -> 0x07) 是否觸發
-        # 0x01: Parse failure | 0x02: Device open failure | 0x04: SMART command failure
+        # 僅檢查 Bit 0, 1, 2 (通訊與指令異常)
         if [ $((smart_rc & 7)) -ne 0 ]; then
             final_rc=2
             reason="SMARTCTL_SNAPSHOT_COMMAND_FAILED"
         elif [ "$smart_rc" -ne 0 ]; then
-            # Bit 3~7 觸發 (有錯誤紀錄等)，Snapshot 本身仍算成功 (RC 0)
-            reason="COMPLETED_WITH_SMART_WARNINGS"
+            # Bit 3~7 觸發，快照已成功取得，改標記 Flags
+            reason="COMPLETED_WITH_SMART_STATUS_FLAGS"
         fi
     fi
 
     local ev_status="COMPLETED"
     [ "$final_rc" -eq 2 ] && ev_status="ABORTED"
 
-    jq -n \
+    # Evidence 寫入雙保險
+    if ! jq -n \
        --arg rc "$final_rc" \
        --arg rsn "$reason" \
        --arg stat "$ev_status" \
+       --argjson obs "$obs_json" \
        '{
          "adapter": {"name": "snapshot", "version": "1.0"},
-         "execution": {"status": $stat, "exit_code": $rc, "reason": $rsn}
-       }' > "$ev_file"
+         "execution": {"status": $stat, "exit_code": ($rc | tonumber), "reason": $rsn},
+         "observation": $obs
+       }' > "$ev_file" 2>/dev/null; then
+        echo "❌ [snapshot_adapter] 嚴重錯誤：Evidence 寫入失敗 ($ev_file)"
+        return 2
+    fi
 
     return "$final_rc"
 }
