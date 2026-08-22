@@ -1,0 +1,7 @@
+{
+  "name": "SATA_HDD_DESTRUCTIVE_BURNIN",
+  "version": "1.0",
+  "execution_profile": "HDD_FULL_BURNIN",
+  "required_host_capabilities": ["badblocks"],
+  "required_device_capabilities": []
+}
