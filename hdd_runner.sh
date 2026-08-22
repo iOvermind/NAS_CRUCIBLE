@@ -1,6 +1,7 @@
 #!/bin/bash
 # =========================================================================
-# 模組: HDD Runner (獨立 Process, 嚴格狀態守衛與契約警察)
+# 模組: HDD Runner (實體 I/O 整合版)
+# 職責: Policy Admission 驗證、嚴格狀態守衛、Adapter 調用與契約執法
 # =========================================================================
 
 SERIAL=$1
@@ -8,52 +9,15 @@ DEV=$2
 PROFILE=$3
 POL_NAME=$4
 POL_VER=$5
+PROTOCOL=$6 # 由外層傳入，"ATA" 或 "SCSI"
 
 EXEC_FILE="./logs/exec_record_${SERIAL}.json"
 
-# =========================================================
-# 🧪 Mock Adapter (供整合演練使用，未來替換為真實 Adapter)
-# =========================================================
-mock_adapter() {
-    local phase=$1
-    local ev_file="./logs/${SERIAL}_${phase}_evidence.json"
-    
-    local inject_var="SIM_${SERIAL//-/_}_${phase}_RC"
-    local inject_no_evd_var="SIM_${SERIAL//-/_}_${phase}_NO_EVD"
-    local inject_bad_schema="SIM_${SERIAL//-/_}_${phase}_BAD_SCHEMA"
-    
-    local rc=${!inject_var:-0}
-    local no_evd=${!inject_no_evd_var:-false}
-    local bad_schema=${!inject_bad_schema:-false}
-    
-    [[ "$rc" =~ ^[0-9]+$ ]] || rc=2
-    sleep 1 
-
-    local status="COMPLETED"
-    local reason="COMPLETED_SUCCESSFULLY"
-    case $rc in
-        1) status="FAILED"; reason="WORKLOAD_FAILED" ;;
-        2) status="ABORTED"; reason="INFRASTRUCTURE_OR_UNCLASSIFIED_FAILURE" ;;
-        130|143) status="INTERRUPTED"; reason="INTERRUPTED_BY_SIGNAL" ;;
-    esac
-
-    if [ "$no_evd" != "true" ]; then
-        if [ "$bad_schema" == "true" ]; then
-            # 產出缺少必要欄位或型別錯誤的惡意 JSON
-            echo '{"execution": {"status": "PASS", "exit_code": "NOT_A_NUMBER"}}' > "$ev_file"
-        else
-            jq -n \
-               --argjson rc "$rc" \
-               --arg rsn "$reason" \
-               --arg stat "$status" \
-               '{
-                 "adapter": {"name": "mock"},
-                 "execution": {"status": $stat, "exit_code": $rc, "reason": $rsn}
-               }' > "$ev_file"
-        fi
-    fi
-    return "$rc"
-}
+# 引入所有實體 Adapter (實務上可透過 source 引入)
+# source ./adapters/precheck_adapter.sh
+# source ./adapters/snapshot_adapter.sh
+# source ./adapters/badblocks_adapter.sh
+# source ./adapters/smartctl_long_adapter.sh
 
 # =========================================================
 # 📦 Runner 骨架與狀態守衛
@@ -90,19 +54,12 @@ update_phase_state() {
     local curr_st
     curr_st=$(jq -r --arg p "$p" '.execution.phases[$p].status // "PHASE_NOT_FOUND"' "$EXEC_FILE")
 
-    if [ "$curr_st" == "PHASE_NOT_FOUND" ]; then
-        echo "❌ [Runner $SERIAL] 試圖更新不存在的 Phase: $p"
-        exit 2
-    fi
+    if [ "$curr_st" == "PHASE_NOT_FOUND" ]; then exit 2; fi
 
     local valid=false
     if [ "$curr_st" == "PENDING" ] && [[ "$new_st" =~ ^(RUNNING|SKIPPED)$ ]]; then valid=true; fi
     if [ "$curr_st" == "RUNNING" ] && [[ "$new_st" =~ ^(PASS|FAIL|ABORTED|INTERRUPTED)$ ]]; then valid=true; fi
-
-    if [ "$valid" != "true" ]; then
-        echo "❌ [Runner $SERIAL] 狀態轉換異常: $p ($curr_st -> $new_st)"
-        exit 2
-    fi
+    [ "$valid" != "true" ] && exit 2
 
     if [ "$new_st" == "RUNNING" ]; then
         jq --arg p "$p" --arg st "$new_st" \
@@ -139,25 +96,44 @@ handle_interrupt() {
     exit "$sig_rc"
 }
 
+# =========================================================
+# ⚙️ Runner 執行階段 (呼叫真實 Adapter)
+# =========================================================
 run_phase() {
     local phase=$1
     update_phase_state "$phase" "RUNNING"
     
-    # 呼叫 Adapter Boundary (此處為 Mock)
-    mock_adapter "$phase"
-    local rc=$?
+    # 根據 Phase 名稱 Dispatch 到對應的真實 Adapter
+    local rc=2
+    case "$phase" in
+        "precheck")
+            precheck_adapter "$DEV" "$SERIAL" "./logs"
+            rc=$?
+            ;;
+        "baseline_snapshot"|"final_snapshot")
+            snapshot_adapter "$DEV" "$SERIAL" "./logs" "$phase"
+            rc=$?
+            ;;
+        "smart_long_1"|"smart_long_2")
+            # 傳入 $PROTOCOL (ATA/SCSI) 讓 Adapter 正確 Parse
+            smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "./logs" 86400
+            rc=$?
+            ;;
+        "badblocks")
+            # 超時設為 3.5 天
+            badblocks_adapter "$DEV" "$SERIAL" "./logs" 302400
+            rc=$?
+            ;;
+    esac
     
-    # ==============================================
-    # 🚔 契約警察 (Runner Validation of Adapter Contract)
-    # ==============================================
+    # 🚔 契約警察：驗證 Evidence 是否合法
     local ev_file="./logs/${SERIAL}_${phase}_evidence.json"
     
-    if [ ! -f "$ev_file" ]; then
-        update_phase_state "$phase" "ABORTED" 2 "ADAPTER_EVIDENCE_MISSING"
+    if [ ! -f "$ev_file" ] || ! jq empty "$ev_file" >/dev/null 2>&1; then
+        update_phase_state "$phase" "ABORTED" 2 "ADAPTER_EVIDENCE_MISSING_OR_INVALID"
         return 2
     fi
 
-    # 嚴格 Schema 驗證 (確保必要欄位存在且型別正確)
     if ! jq -e '
         has("execution")
         and (.execution | has("status") and (.status | type == "string"))
@@ -173,13 +149,12 @@ run_phase() {
     local rsn
     rsn=$(jq -r '.execution.reason' "$ev_file")
 
-    # 驗證 RC 是否一致 (防堵 Adapter 掛羊頭賣狗肉)
     if [ "$ev_rc" != "$rc" ]; then
         update_phase_state "$phase" "ABORTED" 2 "ADAPTER_CONTRACT_VIOLATION_RC_MISMATCH"
         return 2
     fi
 
-    # 依照 RC 正規化流轉
+    # 狀態正規化
     case "$rc" in
         0) update_phase_state "$phase" "PASS" 0 "$rsn" ;;
         1) update_phase_state "$phase" "FAIL" 1 "$rsn" ;;
