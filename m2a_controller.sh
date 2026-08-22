@@ -1,42 +1,18 @@
 #!/bin/bash
 # =========================================================================
-# 模組: M2A Controller (Admission, PGID 隔離與 Global Abort 聚合)
+# 模組: M2A Controller (實體 I/O 派發與 Global Abort 行控中心)
 # =========================================================================
 
-MANIFEST_FILE="./test_manifest.json"
-DECISIONS_FILE="./test_decisions.json"
-mkdir -p "./logs"
-rm -f ./logs/*.json
+MANIFEST_FILE="./device_manifest.json"
+DECISIONS_FILE="./policy_decisions.json"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/logs"
+mkdir -p "$LOG_DIR"
 
-# =========================================================
-# 🧪 建立假資料與壓力測試變數
-# =========================================================
-cat <<EOF > "$DECISIONS_FILE"
-{
-  "SN-PASS-01":   { "decision": "ALLOW", "policy": {"name": "HDD_BURN", "version": "1.0", "execution_profile": "HDD_FULL_BURNIN"} },
-  "SN-LOCAL-02":  { "decision": "ALLOW", "policy": {"name": "HDD_BURN", "version": "1.0", "execution_profile": "HDD_FULL_BURNIN"} },
-  "SN-INFRA-03":  { "decision": "ALLOW", "policy": {"name": "HDD_BURN", "version": "1.0", "execution_profile": "HDD_FULL_BURNIN"} },
-  "SN-NO-EVD-04": { "decision": "ALLOW", "policy": {"name": "HDD_BURN", "version": "1.0", "execution_profile": "HDD_FULL_BURNIN"} },
-  "SN-BAD-SCH-05":{ "decision": "ALLOW", "policy": {"name": "HDD_BURN", "version": "1.0", "execution_profile": "HDD_FULL_BURNIN"} },
-  "SN-WRONG-06":  { "decision": "ALLOW", "policy": {"name": "SSD_BURN", "version": "1.0", "execution_profile": "SSD_FULL_BURNIN"} }
-}
-EOF
-cat <<EOF > "$MANIFEST_FILE"
-{
-  "SN-PASS-01":   { "identity": { "device_handle": "sda", "serial": "SN-PASS-01" } },
-  "SN-LOCAL-02":  { "identity": { "device_handle": "sdb", "serial": "SN-LOCAL-02" } },
-  "SN-INFRA-03":  { "identity": { "device_handle": "sdc", "serial": "SN-INFRA-03" } },
-  "SN-NO-EVD-04": { "identity": { "device_handle": "sdd", "serial": "SN-NO-EVD-04" } },
-  "SN-BAD-SCH-05":{ "identity": { "device_handle": "sde", "serial": "SN-BAD-SCH-05" } },
-  "SN-WRONG-06":  { "identity": { "device_handle": "sdf", "serial": "SN-WRONG-06" } }
-}
-EOF
-
-# 將這些變數 Export 出去，讓 hdd_runner 裡的 Mock Adapter 讀得到
-export SIM_SN_LOCAL_02_badblocks_RC=1
-export SIM_SN_INFRA_03_smart_long_1_RC=2
-export SIM_SN_NO_EVD_04_baseline_snapshot_NO_EVD=true
-export SIM_SN_BAD_SCH_05_precheck_BAD_SCHEMA=true
+if [ ! -f "$MANIFEST_FILE" ] || [ ! -f "$DECISIONS_FILE" ]; then
+    echo "❌ 找不到 Manifest 或 Decisions 檔案，請確認 M1 前置作業已完成。"
+    exit 1
+fi
 
 record_admission_denied() {
     local sn=$1
@@ -52,9 +28,6 @@ record_admission_denied() {
         }' "$DECISIONS_FILE" > "${DECISIONS_FILE}.tmp" && mv "${DECISIONS_FILE}.tmp" "$DECISIONS_FILE"
 }
 
-# =========================================================
-# 🚦 行控中心主迴圈
-# =========================================================
 set -m
 declare -A ACTIVE_PIDS
 declare -A ACTIVE_PGIDS
@@ -84,6 +57,7 @@ echo "=========================================="
 
 while IFS= read -r sn; do
     dev=$(jq -r --arg sn "$sn" '.[$sn].identity.device_handle // "UNKNOWN"' "$MANIFEST_FILE")
+    protocol=$(jq -r --arg sn "$sn" '.[$sn].identity.protocol // "UNKNOWN"' "$MANIFEST_FILE")
     dec_obj=$(jq -c --arg sn "$sn" '.[$sn] // empty' "$DECISIONS_FILE")
     
     decision=$(jq -r '.decision // "BLOCK"' <<< "$dec_obj")
@@ -91,13 +65,21 @@ while IFS= read -r sn; do
     pol_name=$(jq -r '.policy.name // "UNKNOWN"' <<< "$dec_obj")
     pol_ver=$(jq -r '.policy.version // "UNKNOWN"' <<< "$dec_obj")
 
-    echo "📋 檢核: /dev/$dev (SN: $sn)"
+    echo "📋 檢核: /dev/$dev (SN: $sn, Protocol: $protocol)"
     
+    case "$protocol" in
+        ATA|SCSI) ;;
+        *)
+            echo "   ❌ 拒絕入場。不支援的 Protocol ($protocol)。"
+            record_admission_denied "$sn" "UNSUPPORTED_OR_MISSING_PROTOCOL" "ATA_OR_SCSI" "$protocol"
+            continue
+            ;;
+    esac
+
     if [ "$decision" == "ALLOW" ]; then
         if [ "$prof" == "HDD_FULL_BURNIN" ]; then
-            echo "   ✅ 入場核准。啟動獨立 Runner Process..."
-            # 透過 setsid 將 Runner 與 Controller 在程序樹上徹底切割
-            setsid ./hdd_runner.sh "$sn" "$dev" "$prof" "$pol_name" "$pol_ver" &
+            echo "   ✅ 入場核准。啟動實體 Runner Process..."
+            setsid "$SCRIPT_DIR/hdd_runner.sh" "$sn" "$dev" "$prof" "$pol_name" "$pol_ver" "$protocol" &
             pid=$!
             pgid=$(ps -o pgid= -p "$pid" | grep -Eo '[0-9]+' | head -n1)
             [ -z "$pgid" ] && pgid=$pid
@@ -111,7 +93,7 @@ while IFS= read -r sn; do
 done < <(jq -r 'keys[]' "$MANIFEST_FILE")
 
 echo "=========================================="
-echo " 📡 Controller: 等待子程序結束..."
+echo " 📡 Controller: 進入監聽迴圈..."
 echo "=========================================="
 
 while [ ${#ACTIVE_PIDS[@]} -gt 0 ]; do
@@ -128,7 +110,7 @@ while [ ${#ACTIVE_PIDS[@]} -gt 0 ]; do
             echo "📊 [Controller] Runner $sn 結束 (RC: $rc)"
 
             if [ $rc -eq 1 ]; then
-                echo "   -> 偵測到單機任務失敗 (LOCAL FAIL)。"
+                echo "   -> $sn 發生單機任務失敗 (LOCAL FAIL)，其餘盤繼續。"
                 ANY_LOCAL_FAILURE=true
             elif [[ $rc -eq 2 || $rc -eq 130 || $rc -eq 143 ]]; then
                 if [ "$GLOBAL_ABORT" != "true" ]; then
