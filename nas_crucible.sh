@@ -114,15 +114,15 @@ parse_smartctl_rc() {
     local rc=$1
     if [ -z "$rc" ] || [ "$rc" -eq 0 ]; then echo "0"; return; fi
     local msg=""
-    (( rc & 1 )) && msg+="CmdFail,"
-    (( rc & 2 )) && msg+="DevOpen,"
-    (( rc & 4 )) && msg+="Chksum,"
-    (( rc & 8 )) && msg+="DiskFail,"
-    (( rc & 16 )) && msg+="PreFail,"
-    (( rc & 32 )) && msg+="PastFail,"
-    (( rc & 64 )) && msg+="ErrLog,"
-    (( rc & 128 )) && msg+="SelfTest,"
-    echo "${msg%,}" # 拔掉最後一個逗號
+    (( rc & 1 )) && msg+="指令失敗,"
+    (( rc & 2 )) && msg+="裝置無法開啟,"
+    (( rc & 4 )) && msg+="校驗碼錯誤,"
+    (( rc & 8 )) && msg+="磁碟即將故障,"
+    (( rc & 16 )) && msg+="預警屬性低於閾值,"
+    (( rc & 32 )) && msg+="曾有屬性低於閾值,"
+    (( rc & 64 )) && msg+="日誌新增錯誤,"
+    (( rc & 128 )) && msg+="自我檢測失敗,"
+    echo "${msg%,}"
 }
 
 wait_all_smart() {
@@ -278,7 +278,7 @@ for dev in "${DRIVES[@]}"; do
 
     # 1. SMART Overall Health
     HEALTH=$(jq -r '.smart_status.passed' "$final_json")
-    if [ "$HEALTH" != "true" ]; then REASON+="[SMART_Health=FAIL] "; fi
+    if [ "$HEALTH" != "true" ]; then REASON+="[整體健康評估不合格] "; fi
 
     # 2. 死亡指標 (Fail-Closed)
     REALLOC=$(jq -r '.ata_smart_attributes.table[]? | select(.id == 5) | .raw.value' "$final_json")
@@ -288,14 +288,14 @@ for dev in "${DRIVES[@]}"; do
     BASE_CRC=$(jq -r '.ata_smart_attributes.table[]? | select(.id == 199) | .raw.value' "$base_json")
     FINAL_CRC=$(jq -r '.ata_smart_attributes.table[]? | select(.id == 199) | .raw.value' "$final_json")
 
-    if ! [[ "$REALLOC" =~ ^[0-9]+$ ]]; then REASON+="[無ID_5數據] "; elif [ "$REALLOC" -ne 0 ]; then REASON+="[Realloc>0] "; fi
-    if ! [[ "$PENDING" =~ ^[0-9]+$ ]]; then REASON+="[無ID_197數據] "; elif [ "$PENDING" -ne 0 ]; then REASON+="[Pending>0] "; fi
-    if ! [[ "$OFFLINE" =~ ^[0-9]+$ ]]; then REASON+="[無ID_198數據] "; elif [ "$OFFLINE" -ne 0 ]; then REASON+="[Offline>0] "; fi
+    if ! [[ "$REALLOC" =~ ^[0-9]+$ ]]; then REASON+="[缺ID_5數據] "; elif [ "$REALLOC" -ne 0 ]; then REASON+="[發現實體壞軌(ID_5)] "; fi
+    if ! [[ "$PENDING" =~ ^[0-9]+$ ]]; then REASON+="[缺ID_197數據] "; elif [ "$PENDING" -ne 0 ]; then REASON+="[發現潛在壞軌(ID_197)] "; fi
+    if ! [[ "$OFFLINE" =~ ^[0-9]+$ ]]; then REASON+="[缺ID_198數據] "; elif [ "$OFFLINE" -ne 0 ]; then REASON+="[無法修復壞軌(ID_198)] "; fi
     
     if ! [[ "$FINAL_CRC" =~ ^[0-9]+$ ]] || ! [[ "$BASE_CRC" =~ ^[0-9]+$ ]]; then 
-        REASON+="[無ID_199數據] "
+        REASON+="[缺ID_199數據] "
     elif [ "$FINAL_CRC" -gt "$BASE_CRC" ]; then 
-        REASON+="[CRC增加] "
+        REASON+="[傳輸錯誤增加(排線或介面異常)] "
     fi
 
     # 3. SMART Error Log 嚴格驗證
@@ -303,15 +303,15 @@ for dev in "${DRIVES[@]}"; do
     FINAL_ERR=$(jq -r '.ata_smart_error_log.summary.count // empty' "$final_json")
     
     if ! [[ "$BASE_ERR" =~ ^[0-9]+$ ]] || ! [[ "$FINAL_ERR" =~ ^[0-9]+$ ]]; then
-        REASON+="[ErrorLog解析異常] "
+        REASON+="[日誌解析異常] "
     elif [ "$FINAL_ERR" -gt "$BASE_ERR" ]; then
-        REASON+="[新增ErrorLog] "
+        REASON+="[硬碟內部記錄到新錯誤] "
     fi
 
     # 4. 階段狀態
-    if [ "${P1_STATUS[$dev]}" != "PASS" ]; then REASON+="[P1_異常:${P1_STATUS[$dev]}] "; fi
-    if [ "${BB_STATUS[$dev]}" != "PASS" ]; then REASON+="[Badblocks_異常] "; fi
-    if [ "${P3_STATUS[$dev]}" != "PASS" ]; then REASON+="[P3_異常:${P3_STATUS[$dev]}] "; fi
+    if [ "${P1_STATUS[$dev]}" != "PASS" ]; then REASON+="[初始長程檢測失敗(${P1_STATUS[$dev]})] "; fi
+    if [ "${BB_STATUS[$dev]}" != "PASS" ]; then REASON+="[全盤覆寫測試(badblocks)失敗] "; fi
+    if [ "${P3_STATUS[$dev]}" != "PASS" ]; then REASON+="[最終長程檢測失敗(${P3_STATUS[$dev]})] "; fi
 
     BASE_TEMP=$(jq -r '.temperature.current // "N/A"' "$base_json")
     FINAL_TEMP=$(jq -r '.temperature.current // "N/A"' "$final_json")
