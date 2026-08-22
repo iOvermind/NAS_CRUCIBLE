@@ -20,12 +20,12 @@ precheck_adapter() {
     elif [ ! -e "/sys/class/block/$dev/device" ]; then
         final_rc=2; reason="SYSFS_DEVICE_MISSING"
     else
-        # 2. 一次性獲取 Identity，防禦 TOCTOU
+        # 2. 一次性獲取 Identity JSON (防禦 TOCTOU)
         local identity_json
         identity_json=$(smartctl -j -i "/dev/$dev" 2>/dev/null)
         local smart_rc=$?
 
-        # 檢驗 bit 0, 1, 2
+        # 檢驗 bit 0, 1, 2 (通訊與指令異常)
         if [ $((smart_rc & 7)) -ne 0 ]; then
             final_rc=2; reason="IDENTITY_READ_COMMAND_FAILED"
         elif ! jq empty <<<"$identity_json" >/dev/null 2>&1; then
@@ -46,12 +46,19 @@ precheck_adapter() {
                 local target_real
                 target_real=$(readlink -f "/dev/$dev")
 
+                local zpool_out
+                local zpool_rc
+                zpool_out=$(zpool status -LP 2>/dev/null)
+                zpool_rc=$?
+
                 if lsblk -no MOUNTPOINTS "/dev/$dev" | grep -q "\S" || findmnt "/dev/$dev" >/dev/null 2>&1; then
                     final_rc=2; reason="DEVICE_IS_MOUNTED"
                 elif lsblk -f "/dev/$dev" | grep -iq "zfs_member"; then
                     final_rc=2; reason="ACTIVE_ZFS_MEMBER_PARTITION"
-                # zpool status -LP 輸出第一欄即為裝置路徑，用 awk 取出比對
-                elif zpool status -LP 2>/dev/null | awk '{print $1}' | grep -Fxq "$target_real"; then
+                elif [ "$zpool_rc" -ne 0 ]; then
+                    # zpool 指令失敗，無法證明硬碟不在 Pool 內，立即 RC 2 攔截！
+                    final_rc=2; reason="ZPOOL_STATUS_QUERY_FAILED"
+                elif printf '%s\n' "$zpool_out" | awk '{print $1}' | grep -Fxq "$target_real"; then
                     final_rc=2; reason="ACTIVE_ZFS_POOL_MEMBER"
                 fi
             fi
@@ -61,14 +68,18 @@ precheck_adapter() {
     local ev_status="COMPLETED"
     [ "$final_rc" -eq 2 ] && ev_status="ABORTED"
 
-    jq -n \
+    # 5. Evidence 寫入雙保險 (寫入失敗直接 RC 2)
+    if ! jq -n \
        --arg rc "$final_rc" \
        --arg rsn "$reason" \
        --arg stat "$ev_status" \
        '{
          "adapter": {"name": "precheck", "version": "1.0"},
-         "execution": {"status": $stat, "exit_code": $rc, "reason": $rsn}
-       }' > "$ev_file"
+         "execution": {"status": $stat, "exit_code": ($rc | tonumber), "reason": $rsn}
+       }' > "$ev_file" 2>/dev/null; then
+        echo "❌ [precheck_adapter] 嚴重錯誤：Evidence 寫入失敗 ($ev_file)"
+        return 2
+    fi
 
     return "$final_rc"
 }
