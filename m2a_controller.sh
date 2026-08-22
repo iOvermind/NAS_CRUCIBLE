@@ -3,6 +3,19 @@
 # 模組: M2A Controller (實體 I/O 派發與 Global Abort 行控中心)
 # =========================================================================
 
+# 1. Root 與 依賴防護網 (Dependency Gate)
+if [ "$EUID" -ne 0 ]; then
+    echo "❌ 致命錯誤：必須以 root 權限執行此破壞性工具！"
+    exit 2
+fi
+
+for cmd in smartctl jq lsblk findmnt zpool setsid ps; do
+    command -v "$cmd" >/dev/null 2>&1 || {
+        echo "❌ 致命錯誤：系統缺少必要依賴套件 [$cmd]！"
+        exit 2
+    }
+done
+
 MANIFEST_FILE="./device_manifest.json"
 DECISIONS_FILE="./policy_decisions.json"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
