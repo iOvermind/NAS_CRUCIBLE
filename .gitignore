@@ -1,0 +1,7 @@
+# 忽略所有 burnin 產生的資料夾
+burnin_logs_*/
+
+# 或者如果你真的把檔案全灑在當前目錄，那就加這個：
+*.json
+*.log
+*_selftest.txt
