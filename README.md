@@ -9,16 +9,17 @@ NAS_CRUCIBLE 是一個全自動、Fail-Closed 的儲存裝置破壞性燒機 (Bu
 - SATA HDD (完整支援)
 - SAS HDD (完整支援)
 - SATA SSD / SAS SSD (透過策略跳過抹除，僅測試)
-- NVMe SSD (規劃中)
+- NVMe SSD (透過策略跳過抹除，執行 NVMe Device Self-test；需額外安裝 `nvme-cli`)
 
 ## 系統需求
 - Linux (Debian/Ubuntu 推薦)
 - 必須以 `root` 身分執行
 - 必須在 `tmux` 或 `screen` 中執行 (測試需耗時 3-5 天)
 - 依賴套件: `smartmontools`, `e2fsprogs`, `jq`, `whiptail`
+- 測試 NVMe 裝置時另需 `nvme-cli`
 
 ```bash
-apt install smartmontools e2fsprogs jq whiptail
+apt install smartmontools e2fsprogs jq whiptail nvme-cli
 ```
 
 ## 使用方式

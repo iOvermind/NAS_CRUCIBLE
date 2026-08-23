@@ -1,0 +1,25 @@
+{
+  "smartctl": {
+    "exit_status": 0
+  },
+  "device": {
+    "protocol": "NVMe"
+  },
+  "serial_number": "NVMETEST0001",
+  "smart_status": {
+    "passed": true
+  },
+  "temperature": {
+    "current": 81
+  },
+  "nvme_smart_health_information_log": {
+    "critical_warning": 0,
+    "temperature": 315,
+    "available_spare": 100,
+    "available_spare_threshold": 10,
+    "percentage_used": 1,
+    "media_errors": 0,
+    "num_err_log_entries": 3,
+    "unsafe_shutdowns": 12
+  }
+}

@@ -27,13 +27,14 @@ graph TD
         direction LR
         PRE["precheck_adapter.sh"]
         SNP["snapshot_adapter.sh"]
-        SML["smartctl_long_adapter.sh"]
+        SML["smartctl_long_adapter.sh<br/>(ATA/SCSI)"]
+        NVM["nvme_smart_long_adapter.sh<br/>(NVMe)"]
         BB["badblocks_adapter.sh"]
     end
 
     %% Config & Output
     subgraph "Configuration"
-        POL[("policies/*.json<br/>(SATA/SAS/SSD)")]
+        POL[("policies/*.json<br/>(SATA/SAS/NVMe)")]
     end
     
     subgraph "File System"
@@ -50,12 +51,14 @@ graph TD
     
     RUN -->|5a. 執行 OS 探針| PRE
     RUN -->|5b. 擷取快照| SNP
-    RUN -->|5c. 執行長程檢測| SML
+    RUN -->|"5c. 執行長程檢測 (ATA/SCSI)"| SML
+    RUN -->|"5c'. 執行長程檢測 (NVMe)"| NVM
     RUN -->|5d. 執行破壞性抹除| BB
     
     PRE -.->|6. 寫入 Evidence| LOGS
     SNP -.->|6. 寫入 Evidence| LOGS
     SML -.->|6. 寫入 Evidence| LOGS
+    NVM -.->|6. 寫入 Evidence| LOGS
     BB -.->|6. 寫入 Evidence| LOGS
     
     RUN -->|7. 讀取 baseline/final 呼叫判定| VER
@@ -75,7 +78,7 @@ graph TD
 | `crucible_controller.sh` | **進程協調器**。負責 `setsid` 隔離、追蹤 PGID，並在 `Ctrl+C` 時觸發 Global Abort，防止失控寫入。 |
 | `device_runner.sh` | **單碟狀態機**。管理 `precheck` → `baseline` → `smart` → `badblocks` → `final` 的嚴格管線與 Fail-Closed 狀態。 |
 | `verdict_engine.sh` | **裁決引擎**。純資料處理器，根據 Policy 規則對比兩次 JSON 快照，判斷是否 PASS。 |
-| `adapters/*.sh` | **硬體防腐層 (Hardware Seam)**。將雜亂的 OS 指令轉譯為標準化、強型別的 JSON Evidence。 |
+| `adapters/*.sh` | **硬體防腐層 (Hardware Seam)**。將雜亂的 OS 指令轉譯為標準化、強型別的 JSON Evidence。長程檢測依協議分派：ATA/SCSI 走 `smartctl -t long`，NVMe 走 `nvme device-self-test`。 |
 | `policies/*.json` | **策略定義檔**。定義不同 Device Class (如 SAS_SSD) 的 timeout 與 SMART 判定規則 (Verdict Rules)。 |
 | `lib/device_probe.sh` | **共用探針**。集中提供安全的硬碟可達性檢查 (is_device_accessible)。 |
 | `logs/` | **不可變證據 (Immutable Evidence)**。保存每一次測試的原始 JSON，保證重啟或當機可追溯。 |
@@ -84,5 +87,5 @@ graph TD
 
 系統內部完全捨棄 Bash 變數傳遞複雜狀態，改以 JSON 作為各層的契約 (Evidence-based)：
 1. **Admission Contract:** `crucible.sh` 產出 `device_manifest.json` 交給 Controller。
-2. **Adapter Contract:** 每個 Adapter 必定產出 `<serial>_<phase>_evidence.json`。
+2. **Adapter Contract:** 每個 Adapter 必定產出 `<serial>_<phase>_evidence.json`；檔名與 `<phase>` 不符會被 runner 判為 `ADAPTER_CONTRACT_VIOLATION`。
 3. **Verdict Contract:** Verdict Engine 產出標準化的 `verdict_evidence.json` 供 CLI 渲染結果。

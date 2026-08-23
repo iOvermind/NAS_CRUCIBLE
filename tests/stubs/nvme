@@ -1,0 +1,4 @@
+#!/bin/bash
+# stub: 記錄呼叫參數供斷言，永遠成功
+echo "$*" >> "${STUB_NVME_CALLS:-/dev/null}"
+exit 0

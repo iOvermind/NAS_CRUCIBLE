@@ -1,0 +1,71 @@
+{
+  "name": "NVME_SSD_BURNIN",
+  "version": "1.0",
+  "execution_profile": "SSD_WEAR_BURNIN",
+  "phases": {
+    "badblocks": {
+      "enabled": false,
+      "timeout": 302400
+    },
+    "smart_long": {
+      "timeout": 86400
+    }
+  },
+  "verdict_rules": [
+    {
+      "name": "smart_health",
+      "jq_path": ".smart_status.passed",
+      "check": "equals",
+      "expected": true,
+      "on_missing": "FAIL",
+      "fail_reason": "整體健康評估不合格"
+    },
+    {
+      "name": "nvme_available_spare",
+      "jq_path": ".nvme_smart_health_information_log.available_spare",
+      "check": "min",
+      "expected": 10,
+      "on_missing": "FAIL",
+      "fail_reason": "NVMe 可用備用空間不足 (<10%)"
+    },
+    {
+      "name": "nvme_media_errors",
+      "jq_path": ".nvme_smart_health_information_log.media_errors",
+      "check": "equals",
+      "expected": 0,
+      "on_missing": "FAIL",
+      "fail_reason": "NVMe 偵測到媒體或資料完整性錯誤"
+    },
+    {
+      "name": "nvme_critical_warning",
+      "jq_path": ".nvme_smart_health_information_log.critical_warning",
+      "check": "equals",
+      "expected": 0,
+      "on_missing": "FAIL",
+      "fail_reason": "NVMe 回報嚴重警告旗標"
+    },
+    {
+      "name": "nvme_percentage_used",
+      "jq_path": ".nvme_smart_health_information_log.percentage_used",
+      "check": "max",
+      "expected": 90,
+      "on_missing": "FAIL",
+      "fail_reason": "NVMe 壽命耗用度過高 (>90%)"
+    },
+    {
+      "name": "nvme_error_log_growth",
+      "jq_path": ".nvme_smart_health_information_log.num_err_log_entries",
+      "check": "no_growth",
+      "on_missing": "FAIL",
+      "fail_reason": "NVMe 控制器記錄到新錯誤"
+    },
+    {
+      "name": "temperature_ceiling",
+      "jq_path": ".temperature.current",
+      "check": "max",
+      "expected": 70,
+      "on_missing": "PASS",
+      "fail_reason": "測試後溫度異常偏高"
+    }
+  ]
+}

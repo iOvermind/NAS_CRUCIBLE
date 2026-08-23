@@ -15,7 +15,9 @@ LOG_DIR=$5
 [ "$EUID" -eq 0 ] || exit 2
 command -v jq >/dev/null 2>&1 || exit 2
 command -v smartctl >/dev/null 2>&1 || exit 2
-case "$PROTOCOL" in ATA|SCSI) ;; *) exit 2;; esac
+case "$PROTOCOL" in ATA|SCSI|NVMe) ;; *) exit 2;; esac
+# NVMe 走 nvme-cli 執行 device self-test，缺工具直接 Fail-Closed
+[ "$PROTOCOL" != "NVMe" ] || command -v nvme >/dev/null 2>&1 || exit 2
 [ -f "$POLICY_FILE" ] || exit 2
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +27,7 @@ mkdir -p "$LOG_DIR"
 source "$SCRIPT_DIR/adapters/precheck_adapter.sh"
 source "$SCRIPT_DIR/adapters/snapshot_adapter.sh"
 source "$SCRIPT_DIR/adapters/smartctl_long_adapter.sh"
+source "$SCRIPT_DIR/adapters/nvme_smart_long_adapter.sh"
 source "$SCRIPT_DIR/adapters/badblocks_adapter.sh"
 source "$SCRIPT_DIR/lib/device_probe.sh"
 
@@ -109,7 +112,11 @@ run_phase() {
     smart_long_1|smart_long_2) 
         local timeout
         timeout=$(jq -r ".phases.smart_long.timeout // 86400" "$POLICY_FILE")
-        smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" "$timeout"; rc=$?
+        if [ "$PROTOCOL" = "NVMe" ]; then
+            nvme_smart_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" "$timeout" "$phase"; rc=$?
+        else
+            smartctl_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" "$timeout" "$phase"; rc=$?
+        fi
         ;;
     badblocks) 
         local timeout

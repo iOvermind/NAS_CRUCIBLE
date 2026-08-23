@@ -1,0 +1,15 @@
+#!/bin/bash
+# stub: 僅實作 `-j -l selftest`。前 N 次回報進行中，之後回報完成。
+case "$*" in
+  *"-l selftest"*)
+    n=0
+    [ -f "${STUB_POLL_COUNT:-/nonexistent}" ] && n=$(cat "$STUB_POLL_COUNT")
+    n=$((n+1)); [ -n "${STUB_POLL_COUNT:-}" ] && echo "$n" > "$STUB_POLL_COUNT"
+    if [ "$n" -le "${STUB_RUNNING_POLLS:-2}" ]; then
+      echo '{"nvme_self_test_log":{"current_self_test_operation":{"value":2,"string":"Extended device self-test in progress"},"current_self_test_completion_percent":40}}'
+    else
+      echo '{"nvme_self_test_log":{"current_self_test_operation":{"value":0,"string":"No device self-test operation in progress"},"current_self_test_completion_percent":0,"table":[{"self_test_result":{"value":0,"string":"Completed without error"}}]}}'
+    fi
+    exit "${STUB_SMARTCTL_RC:-0}" ;;
+  *) echo '{}' ; exit 0 ;;
+esac
