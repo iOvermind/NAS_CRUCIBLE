@@ -27,3 +27,7 @@ _Avoid_: Conclusion, Final Check
 **Global Abort**:
 當收到中斷訊號（如 Ctrl+C）時，Controller 透過 PGID 強制終止所有子進程與背景測試工具的行為。
 _Avoid_: Force stop, Kill all
+
+**TUI (Terminal User Interface)**:
+終端機互動式介面。當 `crucible.sh` 不帶參數執行時，提供 checklist 形式的硬碟選擇器，自動掃描系統區塊裝置並顯示裝置資訊與安全標示。
+_Avoid_: Interactive mode, Menu

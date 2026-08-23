@@ -8,6 +8,7 @@ NAS_CRUCIBLE 是一個基於純 Bash 實作的儲存載體（SATA/SAS/NVMe）破
 - `smartmontools` (提供 `smartctl`)
 - `e2fsprogs` (提供 `badblocks`)
 - `jq` (強型別 JSON 操作)
+- `whiptail` (TUI 互動式硬碟選擇介面，Debian 預裝)
 - 系統核心指令 (`lsblk`, `findmnt`, `kill`, `setsid`)
 
 ## 3. 日常開發與測試
@@ -36,6 +37,7 @@ NAS_CRUCIBLE/
 │   ├── sata_ssd.json
 │   └── sas_ssd.json
 ├── legacy/                        # 歸檔舊程式碼 (包含 Gen 1 nas_crucible.sh)
+├── logs/                          # 測試產出 (Evidence JSONs, 不進版控)
 ├── tests/                         # 測試與 Mocks
 ├── README.md                      # 給一般使用者的說明文件
 ├── DEVELOPER.md                   # 給維護者的架構文件

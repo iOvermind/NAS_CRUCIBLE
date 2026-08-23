@@ -1,7 +1,7 @@
 # NAS_CRUCIBLE 待辦事項 (TODO)
 
 ## UI / UX 改善
-- [ ] **互動式硬碟選擇介面 (TUI)**
+- [x] **互動式硬碟選擇介面 (TUI)**
   - 取代手動輸入參數 (`./crucible.sh sdb sdc`)。
   - 當不帶參數執行主程式時，自動掃描系統硬碟。
   - 提供類似 `whiptail`、`dialog` 或 `fzf` 的終端機互動介面。

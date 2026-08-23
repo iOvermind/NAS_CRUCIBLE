@@ -12,16 +12,105 @@ if [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [[
     exit 2
 fi
 
-CRUCIBLE_LOG_DIR="${CRUCIBLE_LOG_DIR:-./burnin_logs_$(date +%Y%m%d_%H%M%S)}"
+CRUCIBLE_LOG_DIR="${CRUCIBLE_LOG_DIR:-./logs/$(date +%Y%m%d_%H%M%S)}"
 CRUCIBLE_POLICY_DIR="${CRUCIBLE_POLICY_DIR:-./policies}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$CRUCIBLE_LOG_DIR"
 MANIFEST="$CRUCIBLE_LOG_DIR/device_manifest.json"
 
+# --- TUI: 互動式硬碟選擇 (無參數時自動啟動) ---
 if [ "$#" -eq 0 ]; then
-    echo "❌ 錯誤: 請指定要測試的區塊裝置 (例如: ./crucible.sh sdb sdc)"
-    exit 2
+    command -v whiptail >/dev/null 2>&1 || {
+        echo "❌ 錯誤: 互動模式需要 whiptail (apt install whiptail)"
+        echo "💡 或者直接指定裝置: ./crucible.sh sdb sdc"
+        exit 2
+    }
+
+    echo "🔍 掃描系統區塊裝置中..."
+
+    checklist_args=()
+    dev_count=0
+
+    # 預先取得 ZFS Pool 狀態 (一次查詢，避免重複呼叫)
+    zpool_out=""
+    zpool_out=$(zpool status -LP 2>/dev/null) || true
+
+    while IFS= read -r dev_path; do
+        dev_name=$(basename "$dev_path")
+
+        # 取得裝置大小 (human-readable)
+        dev_size=$(lsblk -dnbo SIZE "$dev_path" 2>/dev/null | awk '{
+            if ($1 >= 1099511627776) printf "%.1fT", $1/1099511627776
+            else if ($1 >= 1073741824) printf "%.1fG", $1/1073741824
+            else printf "%.0fM", $1/1048576
+        }')
+
+        # 透過 smartctl 取得身分資訊
+        smart_info=$(smartctl -j -i "$dev_path" 2>/dev/null)
+        if [ -n "$smart_info" ] && jq empty <<<"$smart_info" >/dev/null 2>&1; then
+            tui_serial=$(echo "$smart_info" | jq -r '.serial_number // "N/A"')
+            tui_model=$(echo "$smart_info" | jq -r '.model_name // "N/A"')
+            tui_protocol=$(echo "$smart_info" | jq -r '.device.protocol // "UNKNOWN"')
+            tui_is_ssd=$(echo "$smart_info" | jq -r '.rotation_rate == 0')
+
+            tui_class="UNKNOWN"
+            if [ "$tui_protocol" = "ATA" ]; then
+                if [ "$tui_is_ssd" = "true" ]; then tui_class="SATA_SSD"; else tui_class="SATA_HDD"; fi
+            elif [ "$tui_protocol" = "SCSI" ]; then
+                if [ "$tui_is_ssd" = "true" ]; then tui_class="SAS_SSD"; else tui_class="SAS_HDD"; fi
+            elif [ "$tui_protocol" = "NVMe" ]; then
+                tui_class="NVME_SSD"
+            fi
+        else
+            tui_serial="N/A"; tui_model="N/A"; tui_class="UNKNOWN"
+        fi
+
+        # 檢查掛載狀態與 ZFS 成員
+        warnings=""
+        if lsblk -n -o MOUNTPOINT "$dev_path" 2>/dev/null | grep -q "[a-zA-Z0-9]"; then
+            warnings="[MOUNTED] "
+        fi
+        target_real=$(readlink -f "$dev_path")
+        if [ -n "$zpool_out" ] && printf '%s\n' "$zpool_out" | awk '{print $1}' | grep -Fxq "$target_real"; then
+            warnings="${warnings}[ZFS] "
+        fi
+
+        # 截斷過長的型號名稱以適配 whiptail 寬度
+        if [ ${#tui_model} -gt 20 ]; then
+            display_model="${tui_model:0:17}..."
+        else
+            display_model="$tui_model"
+        fi
+
+        label=$(printf "%s%s | %s | SN:%s | %s" "$warnings" "$dev_size" "$display_model" "$tui_serial" "$tui_class")
+        checklist_args+=("$dev_name" "$label" "OFF")
+        dev_count=$((dev_count + 1))
+    done < <(lsblk -dnpo NAME,TYPE 2>/dev/null | awk '$2=="disk" {print $1}')
+
+    if [ "$dev_count" -eq 0 ]; then
+        echo "❌ 未偵測到任何可用的區塊裝置"
+        exit 2
+    fi
+
+    selection=$(whiptail --title "NAS_CRUCIBLE 硬碟選擇" \
+        --checklist "使用方向鍵移動，空白鍵勾選/取消，Enter 確認送出" \
+        20 78 "$dev_count" \
+        "${checklist_args[@]}" \
+        3>&1 1>&2 2>&3) || {
+        echo "使用者取消選擇。"
+        exit 0
+    }
+
+    if [ -z "$selection" ]; then
+        echo "未選擇任何裝置。"
+        exit 0
+    fi
+
+    # whiptail 回傳格式: "sdb" "sdc" — 去除引號後設為位置參數
+    selection=$(echo "$selection" | tr -d '"')
+    # shellcheck disable=SC2086
+    set -- $selection
 fi
 
 echo "=========================================="
@@ -61,6 +150,8 @@ for dev in "$@"; do
     elif [ "$protocol" = "SCSI" ]; then
         if [ "$is_ssd" = "true" ]; then class="SAS_SSD"
         else class="SAS_HDD"; fi
+    elif [ "$protocol" = "NVMe" ]; then
+        class="NVME_SSD"
     fi
     
     policy_file="$CRUCIBLE_POLICY_DIR/${class,,}.json"

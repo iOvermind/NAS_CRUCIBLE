@@ -37,7 +37,7 @@ graph TD
     end
     
     subgraph "File System"
-        LOGS[("burnin_logs_<ts>/<br/>(Evidence JSONs)")]
+        LOGS[("logs/<ts>/<br/>(Evidence JSONs)")]
     end
 
     %% Data Flow
