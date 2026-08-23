@@ -9,10 +9,50 @@
   - 介面上應過濾或標示出已掛載 (Mounted) 或在 ZFS Pool 內的危險硬碟，避免誤選。
 
 ## 架構與功能擴展
-- [ ] 實作 NVMe SSD 的測試策略與 Adapter (`nvme-cli`)。
+- [x] **實作 NVMe SSD 的測試策略與 Adapter (`nvme-cli`)**
+  - `policies/nvme_ssd.json`：critical_warning / available_spare / media_errors /
+    percentage_used / num_err_log_entries 的裁決規則。
+  - `adapters/nvme_smart_long_adapter.sh`：以 `nvme device-self-test` 啟動與中止，
+    以 `smartctl -j -l selftest` 輪詢。
+  - 尚待真機驗證：目前僅以 stub 測試覆蓋，需在有 NVMe 的機器上跑一次完整流程。
+- [ ] **NVMe self-test「完成但有錯誤」目前只記錄在 observation，未直接判 FAIL**
+  - 與 `smartctl_long_adapter` 行為一致（交由 verdict_engine 從 SMART 快照裁決）。
+  - 若要更嚴格，應同時修改兩個 adapter，避免協議間標準不一致。
 
 ## 測試模式擴展
 - [ ] **支援非破壞性檢測模式 (Read-Only / Live Check)**
   - 目前系統為嚴格的 Fail-Closed 破壞性測試，硬碟若已掛載會被阻擋。
   - 新增針對「已掛載 (Mounted) 且正在使用中」硬碟的非破壞性 Policy (例如僅擷取快照或執行背景 SMART Long Test，不跑 badblocks)。
   - 需小心設計，避免非破壞性檢測影響線上服務的 I/O 效能。
+
+## Roadmap: 可開機映像 (Bootable Burn-in Media)
+
+**目標**：插 USB 開機即進入 NAS_CRUCIBLE，與主系統完全隔離，操作體驗類似 memtest86。
+
+### 架構決定：走 minimal Linux live image，不走裸機 EFI application
+memtest86 是不含作業系統的 EFI 應用程式，自行驅動硬體。若照抄該架構，等同要用 C
+重寫 NVMe/AHCI 驅動、SMART 命令與 badblocks，並且會失去 `lsblk` / `findmnt` /
+`zpool` 這些 admission 階段賴以判斷「此碟能否抹除」的安全檢查——與本專案的
+Fail-Closed 核心直接抵觸。因此採用極簡 Linux live image (GParted Live / Clonezilla 路線)，
+使用者體驗相同，但整套 Bash + smartmontools 工具鏈可原封不動沿用。
+
+註：「打包成單一二進位」對 Bash 專案沒有意義，最終產物是 `.img` / `.iso`。
+
+### 候選建置方式
+- **Alpine + `mkimage.sh`**：約 80-150MB，開機快；apk 有 smartmontools / nvme-cli / jq /
+  e2fsprogs。風險：busybox 的 `lsblk` / `findmnt` 功能較弱，`precheck_adapter` 可能需調整。
+- **Debian + `mkosi` 或 `debootstrap` + `systemd-boot`**：約 300-500MB；工具鏈與現行開發
+  環境完全一致，`precheck_adapter` 無須修改，ZFS 支援較完整。
+
+### 開工前必須先解決的設計問題
+- [ ] **Evidence 持久化**：live rootfs 在 RAM，重開機證據全失。3-5 天的測試不可接受。
+      需在 USB 上規劃持久分區掛載至 `logs/`，並處理掛載失敗時的 Fail-Closed 行為。
+- [ ] **live 環境下的 ZFS admission 衝突（最優先）**：live 開機不會匯入 zpool，
+      `zpool status` 失敗 → `precheck_adapter` 回 `ZPOOL_STATUS_QUERY_FAILED` (rc=2)
+      → **每一顆碟都會被擋下，工具完全不可用**。需重新設計「無 ZFS 環境」與
+      「ZFS 查詢失敗」的區分方式，且不可因此鬆脫對線上碟的保護。
+- [ ] **`tmux` / `screen` 強制檢查**：console 上無 SSH 斷線風險，此防呆失去意義，
+      但仍應保留多 TTY 以便觀察。啟動流程需改寫。
+- [ ] **Secure Boot**：自建 kernel 無簽章，開啟 SB 的機器無法開機。
+      需決定走 shim + 自簽金鑰，或於文件中要求使用者關閉 SB。
+
