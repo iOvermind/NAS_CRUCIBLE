@@ -1,0 +1,27 @@
+{
+  "name": "SAS_SSD_BURNIN",
+  "version": "1.0",
+  "execution_profile": "SSD_WEAR_BURNIN",
+  "phases": {
+    "badblocks": { "enabled": false, "timeout": 302400 },
+    "smart_long": { "timeout": 86400 }
+  },
+  "verdict_rules": [
+    {
+      "name": "smart_health",
+      "jq_path": ".smart_status.passed",
+      "check": "equals",
+      "expected": true,
+      "on_missing": "FAIL",
+      "fail_reason": "整體健康評估不合格"
+    },
+    {
+      "name": "temperature_ceiling",
+      "jq_path": ".temperature.current",
+      "check": "max",
+      "expected": 60,
+      "on_missing": "PASS",
+      "fail_reason": "測試後溫度異常偏高"
+    }
+  ]
+}

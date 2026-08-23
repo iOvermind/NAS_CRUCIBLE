@@ -31,10 +31,12 @@ _parse_scsi_poll_state() {
 }
 
 smartctl_long_adapter() {
-    local dev=$1 serial=$2 protocol=$3 log_dir=$4 timeout_sec=${5:-86400}
-    local start_log="$log_dir/${serial}_smart_start.log"
-    local result_log="$log_dir/${serial}_smart_result.log"
-    local ev_file="$log_dir/${serial}_smart_evidence.json"
+    local dev=$1 serial=$2 protocol=$3 log_dir=$4 timeout_sec=${5:-86400} phase=${6:-smart}
+    # phase 由 runner 傳入 (smart_long_1 / smart_long_2)，Evidence 檔名必須與 runner 的
+    # "${SERIAL}_${phase}_evidence.json" 契約一致，否則會被判為 ADAPTER_CONTRACT_VIOLATION。
+    local start_log="$log_dir/${serial}_${phase}_start.log"
+    local result_log="$log_dir/${serial}_${phase}_result.log"
+    local ev_file="$log_dir/${serial}_${phase}_evidence.json"
     
     local final_rc=2 reason="UNCLASSIFIED_FAILURE" observation="UNKNOWN"
     local abort_signal="" abort_req="false" abort_rc="null" timeout_triggered="false"

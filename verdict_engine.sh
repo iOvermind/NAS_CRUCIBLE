@@ -86,11 +86,23 @@ for (( i=0; i<$num_rules; i++ )); do
                 REASONS+=("$fail_reason")
             fi
             ;;
+        min)
+            below=$(jq -n --argjson f "$final_val" --argjson e "$expected" 'if $f < $e then true else false end' 2>/dev/null)
+            if [ "$below" == "true" ]; then
+                OVERALL_PASS=false
+                REASONS+=("$fail_reason")
+            fi
+            ;;
     esac
 done
 
-reasons_json=$(printf '%s\n' "${REASONS[@]}" | jq -R . | jq -s .)
-[ "$reasons_json" == "[]" ] && reasons_json="[]"
+# 注意：空陣列不可直接餵給 printf，`printf '%s\n'` 無參數時仍會印出一個空行，
+# 導致 reasons 變成 [""] 而非 []。必須先判斷長度。
+if [ "${#REASONS[@]}" -eq 0 ]; then
+    reasons_json="[]"
+else
+    reasons_json=$(printf '%s\n' "${REASONS[@]}" | jq -R . | jq -s .)
+fi
 
 jq -n \
   --argjson pass "$OVERALL_PASS" \

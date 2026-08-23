@@ -2,6 +2,6 @@
 logs/
 
 # 忽略散落在根目錄的產出檔案
-*.json
-*.log
+/*.json
+/*.log
 *_selftest.txt
