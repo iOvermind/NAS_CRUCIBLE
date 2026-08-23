@@ -93,11 +93,30 @@ validate_evidence() {
 }
 
 run_phase() {
-  local phase=$1 rc=2 ev_file="$LOG_DIR/${SERIAL}_${phase}_evidence.json"
+  # 必須分開宣告。`local a=$1 b="${a}"` 在 set -u 之下會失敗：bash 會先把
+  # 同一個 local 陳述句裡的所有名稱都宣告成 local (未設值)，才依序賦值，
+  # 因此第三個詞展開到的是「未綁定的 local phase」而非參數值。
+  # 舊版寫成一行，run_phase 在第一個 phase 就以「未綁定的變數」中止，
+  # 整個執行層從未真正跑完任何一次 burn-in。
+  local phase=$1
+  local rc=2
+  local ev_file="$LOG_DIR/${SERIAL}_${phase}_evidence.json"
   
   # Check if policy disables this phase
+  # policy 用 "smart_long" 一個區段涵蓋兩輪，但 phase 叫 smart_long_1/_2，
+  # 拿 phase 當 key 查不到任何東西。
+  local policy_section=$phase
+  case "$phase" in
+    smart_long_1|smart_long_2) policy_section="smart_long" ;;
+  esac
+  # 不可寫成 `.enabled // true`：jq 只把 null 與 false 視為假值，所以
+  # `// true` 會把 `"enabled": false` 也一併換成 true —— 這個 phase 將
+  # 永遠無法被 policy 停用，24 小時的長測照跑不誤。缺鍵才套預設值。
   local enabled
-  enabled=$(jq -r ".phases.\"$phase\".enabled // true" "$POLICY_FILE")
+  enabled=$(jq -r ".phases.\"$policy_section\".enabled" "$POLICY_FILE" 2>/dev/null)
+  if [ -z "$enabled" ] || [ "$enabled" == "null" ]; then
+      enabled=true
+  fi
   if [ "$enabled" == "false" ]; then
       update_phase_state "$phase" SKIPPED 0 "DISABLED_BY_POLICY"
       return 0
@@ -111,7 +130,7 @@ run_phase() {
     baseline_snapshot|final_snapshot) snapshot_adapter "$DEV" "$SERIAL" "$LOG_DIR" "$phase"; rc=$?;;
     smart_long_1|smart_long_2) 
         local timeout
-        timeout=$(jq -r ".phases.smart_long.timeout // 86400" "$POLICY_FILE")
+        timeout=$(jq -r ".phases.smart_long.timeout // 86400" "$POLICY_FILE")  # 同 policy_section
         if [ "$PROTOCOL" = "NVMe" ]; then
             nvme_smart_long_adapter "$DEV" "$SERIAL" "$PROTOCOL" "$LOG_DIR" "$timeout" "$phase"; rc=$?
         else
@@ -155,22 +174,56 @@ run_phase() {
 update_exec_status RUNNING
 final_rc=0
 failed=false
+infra_abort=false
+interrupted=false
+
+# rc 語意：0=通過, 1=工作負載失敗, 2=基礎設施中止。2 具吸收性。
+merge_final_rc() {
+  case "$1" in
+    0) ;;
+    1) [ "$final_rc" -eq 0 ] && final_rc=1 ;;
+    *) final_rc=2 ;;
+  esac
+}
+
+# 蒐證階段：即使工作負載失敗也必須執行。
+# badblocks 回報 rc=1 (發現壞軌) 或 SMART long test 判定失敗，正是
+# reallocated_sector / pending_sector 計數最關鍵的時刻；舊版在這裡把
+# final_snapshot 與 verdict 一併 SKIPPED，導致 <serial>_verdict_evidence.json
+# 根本不存在，crucible.sh 只印得出「FAIL [未完成]」——把最需要解釋的失敗
+# 變成最沒有證據的失敗。
+is_evidence_phase() {
+  case "$1" in final_snapshot|verdict) return 0 ;; *) return 1 ;; esac
+}
+
 for p in "${PHASES[@]}"; do
   if [ "$failed" = true ]; then
-    update_phase_state "$p" SKIPPED 0 PREVIOUS_PHASE_FAILED
-    continue
+    # 基礎設施中止 (rc=2) 代表裝置或工具已不可信，蒐證也無意義，全部跳過。
+    if [ "$infra_abort" = true ] || ! is_evidence_phase "$p"; then
+      update_phase_state "$p" SKIPPED 0 "PREVIOUS_PHASE_FAILED"
+      continue
+    fi
   fi
-  run_phase "$p"
-  rc=$?
-  if [ "$rc" -ne 0 ]; then failed=true; final_rc=$rc; fi
+  run_phase "$p"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    failed=true
+    [ "$rc" -ne 1 ] && infra_abort=true
+    case "$rc" in 130|143) interrupted=true ;; esac
+    merge_final_rc "$rc"
+  fi
 done
 
-case "$final_rc" in
-  0) update_exec_status COMPLETED;;
-  1) update_exec_status FAILED_EXECUTION;;
-  2) update_exec_status ABORTED;;
-  130|143) update_exec_status INTERRUPTED;;
-  *) final_rc=2; update_exec_status ABORTED;;
-esac
+# merge_final_rc 已把 130/143 正規化成 2，所以中斷與否要靠旗標判斷，
+# 不能再從 final_rc 反推。
+if [ "$interrupted" = true ]; then
+  update_exec_status INTERRUPTED
+else
+  case "$final_rc" in
+    0) update_exec_status COMPLETED;;
+    1) update_exec_status FAILED_EXECUTION;;
+    *) update_exec_status ABORTED;;
+  esac
+fi
 jq '.execution.current_phase="none"' "$EXEC_FILE" > "$EXEC_FILE.tmp" && mv "$EXEC_FILE.tmp" "$EXEC_FILE"
+
 exit "$final_rc"
