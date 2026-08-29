@@ -12,10 +12,17 @@ if [ -z "${TMUX:-}" ] && [ -z "${STY:-}" ] && [[ "${TERM:-}" != screen* ]] && [[
     exit 2
 fi
 
-CRUCIBLE_LOG_DIR="${CRUCIBLE_LOG_DIR:-./logs/$(date +%Y%m%d_%H%M%S)}"
-CRUCIBLE_POLICY_DIR="${CRUCIBLE_POLICY_DIR:-./policies}"
-
+# SCRIPT_DIR 必須先算出來：預設的 logs/ 與 policies/ 都要錨定在腳本所在
+# 位置，不能用 ./ 相對於當前工作目錄。原本 `sudo -E /opt/NAS_CRUCIBLE/crucible.sh sdb`
+# 從 $HOME 執行時，policy 會去 $HOME/policies 找，`[ -f "$policy_file" ]`
+# 全部落空 -> 每顆碟都 decision=BLOCK -> controller 印「No allowed devices」
+# 並 exit 0，工具回報成功卻一顆碟都沒測。
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+CRUCIBLE_LOG_DIR="${CRUCIBLE_LOG_DIR:-$SCRIPT_DIR/logs/$(date +%Y%m%d_%H%M%S)}"
+CRUCIBLE_POLICY_DIR="${CRUCIBLE_POLICY_DIR:-$SCRIPT_DIR/policies}"
+
+source "$SCRIPT_DIR/lib/device_probe.sh"
 mkdir -p "$CRUCIBLE_LOG_DIR"
 MANIFEST="$CRUCIBLE_LOG_DIR/device_manifest.json"
 
@@ -33,8 +40,6 @@ if [ "$#" -eq 0 ]; then
     dev_count=0
 
     # 預先取得 ZFS Pool 狀態 (一次查詢，避免重複呼叫)
-    zpool_out=""
-    zpool_out=$(zpool status -LP 2>/dev/null) || true
 
     while IFS= read -r dev_path; do
         dev_name=$(basename "$dev_path")
@@ -52,16 +57,12 @@ if [ "$#" -eq 0 ]; then
             tui_serial=$(echo "$smart_info" | jq -r '.serial_number // "N/A"')
             tui_model=$(echo "$smart_info" | jq -r '.model_name // "N/A"')
             tui_protocol=$(echo "$smart_info" | jq -r '.device.protocol // "UNKNOWN"')
-            tui_is_ssd=$(echo "$smart_info" | jq -r '.rotation_rate == 0')
+            # 不可用 `.rotation_rate == 0`：欄位缺漏時 null == 0 為 false，
+            # SSD 會被誤判成 HDD 而套用破壞性 profile。jq 裡 0 是真值，
+            # 所以 `// "ABSENT"` 能正確區分「值為 0」與「欄位不存在」。
+            tui_rot=$(echo "$smart_info" | jq -r '.rotation_rate // "ABSENT"')
 
-            tui_class="UNKNOWN"
-            if [ "$tui_protocol" = "ATA" ]; then
-                if [ "$tui_is_ssd" = "true" ]; then tui_class="SATA_SSD"; else tui_class="SATA_HDD"; fi
-            elif [ "$tui_protocol" = "SCSI" ]; then
-                if [ "$tui_is_ssd" = "true" ]; then tui_class="SAS_SSD"; else tui_class="SAS_HDD"; fi
-            elif [ "$tui_protocol" = "NVMe" ]; then
-                tui_class="NVME_SSD"
-            fi
+            tui_class=$(classify_device "$tui_protocol" "$tui_rot")
         else
             tui_serial="N/A"; tui_model="N/A"; tui_class="UNKNOWN"
         fi
@@ -71,9 +72,15 @@ if [ "$#" -eq 0 ]; then
         if lsblk -n -o MOUNTPOINT "$dev_path" 2>/dev/null | grep -q "[a-zA-Z0-9]"; then
             warnings="[MOUNTED] "
         fi
-        target_real=$(readlink -f "$dev_path")
-        if [ -n "$zpool_out" ] && printf '%s\n' "$zpool_out" | awk '{print $1}' | grep -Fxq "$target_real"; then
-            warnings="${warnings}[ZFS] "
+        # 整碟 pool 時 zpool 印的是 /dev/sdb1 而非 /dev/sdb，原本的 grep -Fxq
+        # 全行比對永遠不命中，[ZFS] 警告在最常見的情境下從來不會顯示。
+        dev_in_zpool "$(basename "$dev_path")"
+        case $? in
+            0) warnings="${warnings}[ZFS] " ;;
+            2) warnings="${warnings}[ZFS?] " ;;
+        esac
+        if dev_has_holders "$(basename "$dev_path")"; then
+            warnings="${warnings}[LVM/RAID] "
         fi
 
         # 截斷過長的型號名稱以適配 whiptail 寬度
@@ -131,6 +138,19 @@ for dev in "$@"; do
         exit 2
     fi
     
+    # ZFS / LVM / mdraid / LUKS 歸屬。真正的攔截點在 precheck_adapter，
+    # 這裡是縱深防禦：在使用者輸入 YES 之前就把危險裝置擋掉，而不是等到
+    # 破壞性階段前一刻才失敗。
+    dev_in_zpool "$dev"
+    case $? in
+        0) echo "❌ /dev/$dev 屬於已匯入的 ZFS pool"; exit 2 ;;
+        2) echo "❌ 無法確認 /dev/$dev 是否屬於 ZFS pool (zpool 查詢失敗)"; exit 2 ;;
+    esac
+    if dev_has_holders "$dev"; then
+        echo "❌ /dev/$dev 正被上層儲存堆疊佔用 (LVM / mdraid / LUKS)"
+        exit 2
+    fi
+
     # query smartctl
     smart_info=$(smartctl -j -i "/dev/$dev" 2>/dev/null)
     if [ -z "$smart_info" ]; then
@@ -141,18 +161,12 @@ for dev in "$@"; do
     serial=$(echo "$smart_info" | jq -r '.serial_number // "UNKNOWN"')
     protocol=$(echo "$smart_info" | jq -r '.device.protocol // "UNKNOWN"')
     model=$(echo "$smart_info" | jq -r '.model_name // "UNKNOWN"')
-    is_ssd=$(echo "$smart_info" | jq -r '.rotation_rate == 0')
-    
-    class="UNKNOWN"
-    if [ "$protocol" = "ATA" ]; then
-        if [ "$is_ssd" = "true" ]; then class="SATA_SSD"
-        else class="SATA_HDD"; fi
-    elif [ "$protocol" = "SCSI" ]; then
-        if [ "$is_ssd" = "true" ]; then class="SAS_SSD"
-        else class="SAS_HDD"; fi
-    elif [ "$protocol" = "NVMe" ]; then
-        class="NVME_SSD"
-    fi
+    # 見上方 TUI 的說明：rotation_rate 缺漏時不得預設成 HDD。
+    # 對「不知道是不是 SSD」的裝置套用 HDD 的破壞性 profile，等於拿 302400
+    # 秒的全碟寫入去賭。分類不出來就不分類，交由下方沒有對應 policy 而 BLOCK。
+    rot=$(echo "$smart_info" | jq -r '.rotation_rate // "ABSENT"')
+
+    class=$(classify_device "$protocol" "$rot")
     
     policy_file="$CRUCIBLE_POLICY_DIR/${class,,}.json"
     if [ -f "$policy_file" ]; then
@@ -173,6 +187,14 @@ for dev in "$@"; do
         --arg dec "$decision" \
         --arg pol "$policy_file" \
         '{device: $dev, serial: $sn, protocol: $proto, class: $cls, decision: $dec, policy_path: $pol}')
+    # runner 的狀態機與證據檔以序號命名。smartctl 讀不到 serial_number 時
+    # 一律回 UNKNOWN，兩顆這種碟 (常見於廉價 USB/SAS 橋接器) 會共用
+    # exec_record_UNKNOWN.json 與 UNKNOWN_*_evidence.json 互相覆寫。
+    if jq -e --arg sn "$serial" 'any(.[]; .serial == $sn)' <<<"$devices_json" >/dev/null; then
+        echo "❌ /dev/$dev 的序號與先前的裝置重複 (SN: $serial)，無法分辨證據歸屬"
+        exit 2
+    fi
+
     devices_json=$(echo "$devices_json" | jq ". + [$dev_obj]")
 done
 

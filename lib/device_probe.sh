@@ -63,3 +63,32 @@ dev_has_holders() {
     done
     return 1
 }
+
+# -------------------------------------------------------------------------
+# 依協議與 rotation_rate 判定 Device Class
+#   classify_device <protocol> <rotation_rate|ABSENT>
+#
+# 這段邏輯原本在 crucible.sh 的 TUI 與 preflight 各寫了一份，同一個
+# 誤判 bug 因此出現兩次。抽成單一來源，並由 tests/test_classify.sh 鎖住。
+#
+# rotation_rate 缺漏時一律回 UNKNOWN。絕不可預設成 HDD ——
+# 那會對一顆不確定是不是 SSD 的碟套用 302400 秒的破壞性全碟寫入。
+# 注意 jq 裡 0 是真值，取值要用 `.rotation_rate // "ABSENT"` 才能區分
+# 「值為 0」與「欄位不存在」；用 `.rotation_rate == 0` 會讓缺漏變成 false。
+# -------------------------------------------------------------------------
+classify_device() {
+    local protocol=$1 rot=$2
+    case "$protocol" in
+        NVMe) echo "NVME_SSD"; return 0 ;;
+        ATA|SCSI) ;;
+        *) echo "UNKNOWN"; return 0 ;;
+    esac
+    case "$rot" in
+        ''|ABSENT|null) echo "UNKNOWN"; return 0 ;;
+    esac
+    if [ "$rot" = "0" ]; then
+        [ "$protocol" = "ATA" ] && echo "SATA_SSD" || echo "SAS_SSD"
+    else
+        [ "$protocol" = "ATA" ] && echo "SATA_HDD" || echo "SAS_HDD"
+    fi
+}

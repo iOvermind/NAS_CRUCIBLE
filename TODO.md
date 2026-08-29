@@ -47,10 +47,14 @@ Fail-Closed 核心直接抵觸。因此採用極簡 Linux live image (GParted Li
 ### 開工前必須先解決的設計問題
 - [ ] **Evidence 持久化**：live rootfs 在 RAM，重開機證據全失。3-5 天的測試不可接受。
       需在 USB 上規劃持久分區掛載至 `logs/`，並處理掛載失敗時的 Fail-Closed 行為。
-- [ ] **live 環境下的 ZFS admission 衝突（最優先）**：live 開機不會匯入 zpool，
-      `zpool status` 失敗 → `precheck_adapter` 回 `ZPOOL_STATUS_QUERY_FAILED` (rc=2)
-      → **每一顆碟都會被擋下，工具完全不可用**。需重新設計「無 ZFS 環境」與
-      「ZFS 查詢失敗」的區分方式，且不可因此鬆脫對線上碟的保護。
+- [x] **live 環境下的 ZFS admission 衝突**：已由 `lib/device_probe.sh` 的
+      `dev_in_zpool` 解決。判斷依據改為「`zpool` 指令是否存在」：指令不存在
+      代表系統上不可能有已匯入的 pool，回傳「確定不屬於」而非查詢失敗；
+      只有在 `zpool` 可用但查詢失敗時才回傳「無法判定」並維持 rc=2。
+      對線上碟的保護沒有鬆脫 —— 有 ZFS 的環境行為完全不變。
+- [ ] **live image 是否安裝 zfsutils**：承上，若 live image 內裝了 `zpool`
+      但沒有匯入任何 pool，`zpool status` 的回傳碼需要實機確認 (無 pool 時
+      是否為 0)。若非 0 則會退回「無法判定」而擋下所有碟。尚未實機驗證。
 - [ ] **`tmux` / `screen` 強制檢查**：console 上無 SSH 斷線風險，此防呆失去意義，
       但仍應保留多 TTY 以便觀察。啟動流程需改寫。
 - [ ] **Secure Boot**：自建 kernel 無簽章，開啟 SB 的機器無法開機。

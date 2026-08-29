@@ -80,7 +80,7 @@ graph TD
 | `verdict_engine.sh` | **裁決引擎**。純資料處理器，根據 Policy 規則對比兩次 JSON 快照，判斷是否 PASS。 |
 | `adapters/*.sh` | **硬體防腐層 (Hardware Seam)**。將雜亂的 OS 指令轉譯為標準化、強型別的 JSON Evidence。長程檢測依協議分派：ATA/SCSI 走 `smartctl -t long`，NVMe 走 `nvme device-self-test`。 |
 | `policies/*.json` | **策略定義檔**。定義不同 Device Class (如 SAS_SSD) 的 timeout 與 SMART 判定規則 (Verdict Rules)。 |
-| `lib/device_probe.sh` | **共用探針**。集中提供安全的硬碟可達性檢查 (is_device_accessible)。 |
+| `lib/device_probe.sh` | **共用探針**。硬碟可達性 (`is_device_accessible`)、ZFS pool 歸屬 (`dev_in_zpool`)、上層儲存堆疊佔用 (`dev_has_holders`)、Device Class 判定 (`classify_device`)。這些判斷同時被 `crucible.sh` 的 admission 與 `precheck_adapter` 使用，必須維持單一來源。 |
 | `logs/` | **不可變證據 (Immutable Evidence)**。保存每一次測試的原始 JSON，保證重啟或當機可追溯。 |
 
 ## 資料流與合約 (JSON Contracts)
