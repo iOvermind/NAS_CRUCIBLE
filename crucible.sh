@@ -105,7 +105,7 @@ if [ "$#" -eq 0 ]; then
         smart_info=$(smartctl -j -i "$dev_path" 2>/dev/null)
         if [ -n "$smart_info" ] && jq empty <<<"$smart_info" >/dev/null 2>&1; then
             tui_serial=$(echo "$smart_info" | jq -r '.serial_number // "N/A"')
-            tui_model=$(echo "$smart_info" | jq -r '.model_name // "N/A"')
+            tui_model=$(echo "$smart_info" | jq -r '.model_name // .scsi_model_name // "N/A"')
             tui_protocol=$(echo "$smart_info" | jq -r '.device.protocol // "UNKNOWN"')
             # 不可用 `.rotation_rate == 0`：欄位缺漏時 null == 0 為 false，
             # SSD 會被誤判成 HDD 而套用破壞性 profile。jq 裡 0 是真值，
@@ -232,7 +232,7 @@ for dev in "$@"; do
         if [ -n "$smart_info" ] && jq empty <<<"$smart_info" >/dev/null 2>&1; then
             serial=$(jq -r '.serial_number // "UNKNOWN"' <<<"$smart_info")
             protocol=$(jq -r '.device.protocol // "UNKNOWN"' <<<"$smart_info")
-            model=$(jq -r '.model_name // "UNKNOWN"' <<<"$smart_info")
+            model=$(jq -r '.model_name // .scsi_model_name // "UNKNOWN"' <<<"$smart_info")
             # 見 lib/device_probe.sh：rotation_rate 缺漏時不得預設成 HDD。
             rot=$(jq -r '.rotation_rate // "ABSENT"' <<<"$smart_info")
             class=$(classify_device "$protocol" "$rot")

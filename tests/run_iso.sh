@@ -14,8 +14,14 @@
 set -u
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK=$(mktemp -d); QPID=""; SERIAL_FD_OPEN=false
+KEEP_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/build/out/iso-test-logs"
 cleanup() {
     [ -n "$QPID" ] && kill "$QPID" 2>/dev/null
+    # 失敗時保留序列埠 log：VM 一結束就什麼都不剩，沒有 log 根本無從診斷。
+    if [ "${fail:-0}" -gt 0 ] 2>/dev/null; then
+        mkdir -p "$KEEP_DIR" && cp "$WORK"/*.log "$KEEP_DIR"/ 2>/dev/null \
+            && echo "序列埠 log 已保留於 $KEEP_DIR"
+    fi
     rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -182,9 +188,11 @@ wait_for "$BOOTMARK" "$BOOT_TIMEOUT"
 check "isohybrid MBR 可由 BIOS 開機並進到 userspace" "$?"
 wait_shell bios
 check "序列埠取得可用的 root shell" "$?"
-send "pgrep -f crucible-autostart >/dev/null && echo AUTOSTART\"\"_RUNNING"
-wait_for "AUTOSTART_RUNNING" 60
-check "tty1 的選碟啟動流程已在執行" "$?"
+# 不能用 pgrep 找 crucible-autostart：它最後會 exec 成 fbterm/tmux，
+# 行程映像被取代，名字就消失了。改為確認 tmux session 真的起來。
+send "tmux ls 2>&1 | head -2"
+wait_for "burnin" 60
+check "tty1 的 tmux session (burnin) 已建立" "$?"
 grep -qF "Evidence Store 就緒" "$WORK/bios.log"
 check "首次開機在隨身碟尾端建立 Evidence Store" "$?"
 grep -qF "降級為 No-Persistence Mode" "$WORK/bios.log"
@@ -244,7 +252,9 @@ if wait_for "$BOOTMARK" "$BOOT_TIMEOUT" && wait_shell adm; then
     wait_for "MFEND" 120
 
     MF="$WORK/manifest.json"
-    sed -n '/^MFBEGIN/,/^MFEND/p' "$WORK/adm.log" \
+    # 不能用行首錨點：標記前面會有 bash 的 ANSI 逸出序列 (bracketed paste)。
+    # 送進去的指令用 "" 切開過，所以不加錨點也不會匹配到自己的回顯。
+    sed -n '/MFBEGIN/,/MFEND/p' "$WORK/adm.log" \
         | sed '1d;$d' | tr -d '\r' | grep -m1 '^{' > "$MF"
     if jq -e . "$MF" >/dev/null 2>&1; then
         q() { jq -r "$1" "$MF" 2>/dev/null; }
@@ -271,7 +281,10 @@ if wait_for "$BOOTMARK" "$BOOT_TIMEOUT" && wait_shell adm; then
         fi
     else
         check "manifest 取回成功" 1
-        echo "      (序列埠輸出見 $WORK/adm.log；VM 已結束，無法保留)"
+        # 把 VM 內的實際情形倒進序列埠，log 才有東西可看。
+        send "echo ---ADMOUT---; tail -20 /tmp/adm.out; echo ---LSDIR---; ls -la /tmp/adm/ 2>&1 | head -20"
+        wait_for "---LSDIR---" 60
+        command sleep 3 2>/dev/null || true
     fi
 else
     check "Admission 測試：VM 未開機成功" 1

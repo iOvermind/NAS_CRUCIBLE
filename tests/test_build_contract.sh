@@ -20,7 +20,7 @@ for f in Dockerfile build_iso.sh in_container/build.sh in_container/packages.lis
          rootfs/usr/local/sbin/crucible-evidence-store \
          rootfs/usr/local/sbin/crucible-autostart \
          rootfs/etc/systemd/system/crucible-evidence-store.service \
-         "rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf"; do
+         "rootfs/etc/systemd/system/getty@tty1.service.d/zz-crucible-autologin.conf"; do
     check "build/$f" "$([ -f "$B/$f" ]; echo $?)"
 done
 for f in build_iso.sh in_container/build.sh \
@@ -133,14 +133,21 @@ check "摘要分區的 FAT 卷標不超過 11 字元 (實得 $rpt_label, ${#rpt_
 
 echo
 echo "== 開機流程 =="
-AL="$B/rootfs/etc/systemd/system/getty@tty1.service.d/autologin.conf"
+AL="$B/rootfs/etc/systemd/system/getty@tty1.service.d/zz-crucible-autologin.conf"
 AS="$B/rootfs/usr/local/sbin/crucible-autostart"
 UNIT="$B/rootfs/etc/systemd/system/crucible-evidence-store.service"
 check "tty1 自動登入後進 crucible-autostart" "$(has "$AL" 'crucible-autostart'; echo $?)"
 check "Evidence Store 必須早於 tty1 起來"     "$(has "$UNIT" 'Before=getty@tty1.service'; echo $?)"
 check "autostart 走 fbterm (中文顯示)"        "$(has "$AS" 'fbterm'; echo $?)"
 check "序列埠也自動登入 (BMC redirection 與 run_iso.sh 都需要)" \
-      "$([ -f "$B/rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" ]; echo $?)"
+      "$([ -f "$B/rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/zz-crucible-autologin.conf" ]; echo $?)"
+# live-config 開機時會產生 live-config_autologin.conf (--autologin user)。
+# drop-in 依檔名排序套用，後者覆蓋前者 —— 檔名排在它前面就會被整個蓋掉。
+for f in "$B"/rootfs/etc/systemd/system/*getty@*.service.d/*.conf; do
+    bn=$(basename "$f")
+    check "getty drop-in $bn 排序在 live-config_autologin.conf 之後" \
+          "$([ "$bn" \> "live-config_autologin.conf" ]; echo $?)"
+done
 check "fbterm 不可用時退回純 tty"             "$(has "$AS" '/dev/fb0'; echo $?)"
 check "autostart 在 tmux 內執行 crucible.sh"  "$(has "$AS" 'tmux new-session'; echo $?)"
 # 這一條最容易漏：不指定的話 crucible.sh 會把 log 寫進 live rootfs (RAM)，
