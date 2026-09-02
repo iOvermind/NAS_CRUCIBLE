@@ -142,16 +142,34 @@ wait_for() { # wait_for <字串> <秒數>
 }
 send() { printf '%s\n' "$1" >&3; }
 
-BANNER="NAS_CRUCIBLE 儲存裝置燒機測試"
+# 開機成功的標記取自 crucible-evidence-store.service。
+# 不能用 crucible-autostart 的橫幅 —— 那支跑在 tty1，輸出不會進序列埠；
+# 這個 unit 設了 StandardOutput=journal+console，而 console 就是 ttyS0。
+BOOTMARK="[evidence-store]"
+
+# 確認真的進到可用的 userspace，而不只是 systemd 跑了幾個 unit。
+#
+# 送出去的指令會被 VM 的 tty 行規回顯，因此「等待某字串出現」很容易被自己送的
+# 那一行命中。所有標記都用 "" 切開，讓回顯的輸入 (CRUCIBLE""_SHELL_OK) 與真正
+# 執行後的輸出 (CRUCIBLE_SHELL_OK) 長得不一樣。
+shell_alive() {
+    send "echo CRUCIBLE\"\"_SHELL_OK_$1"
+    wait_for "CRUCIBLE_SHELL_OK_$1" 120
+}
 
 # ============================================ 1. Legacy BIOS 開機路徑 ==
 echo "== Legacy BIOS (SeaBIOS) =="
 boot_vm "$WORK/bios.log"
-wait_for "$BANNER" "$BOOT_TIMEOUT"
-check "isohybrid MBR 可由 BIOS 開機並進到選碟畫面" "$?"
+wait_for "$BOOTMARK" "$BOOT_TIMEOUT"
+check "isohybrid MBR 可由 BIOS 開機並進到 userspace" "$?"
+shell_alive bios
+check "序列埠取得可用的 root shell" "$?"
+send "pgrep -f crucible-autostart >/dev/null && echo AUTOSTART\"\"_RUNNING"
+wait_for "AUTOSTART_RUNNING" 60
+check "tty1 的選碟啟動流程已在執行" "$?"
 grep -qF "Evidence Store 就緒" "$WORK/bios.log"
 check "首次開機在隨身碟尾端建立 Evidence Store" "$?"
-grep -qF "NO PERSISTENCE" "$WORK/bios.log"
+grep -qF "降級為 No-Persistence Mode" "$WORK/bios.log"
 check "未進入 No-Persistence Mode" "$([ $? -ne 0 ]; echo $?)"
 stop_vm
 
@@ -170,8 +188,10 @@ cp "$OVMF_VARS" "$WORK/vars.fd"
 boot_vm "$WORK/uefi.log" \
     -drive "if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_CODE" \
     -drive "if=pflash,format=raw,unit=1,file=$WORK/vars.fd"
-wait_for "$BANNER" "$BOOT_TIMEOUT"
-check "isohybrid GPT 可由 UEFI 開機並進到選碟畫面" "$?"
+wait_for "$BOOTMARK" "$BOOT_TIMEOUT"
+check "isohybrid GPT 可由 UEFI 開機並進到 userspace" "$?"
+shell_alive uefi
+check "UEFI 開機後序列埠取得可用的 root shell" "$?"
 stop_vm
 
 # ====================================== 4. Secure Boot 開機路徑 ==
@@ -184,7 +204,7 @@ if [ -f "$OVMF_CODE_SB" ] && [ -f "$OVMF_VARS_MS" ]; then
         -global driver=cfi.pflash01,property=secure,value=on \
         -drive "if=pflash,format=raw,unit=0,readonly=on,file=$OVMF_CODE_SB" \
         -drive "if=pflash,format=raw,unit=1,file=$WORK/vars_ms.fd"
-    wait_for "$BANNER" "$BOOT_TIMEOUT"
+    wait_for "$BOOTMARK" "$BOOT_TIMEOUT"
     check "shim + 簽章 grub + 官方 kernel 通過 Secure Boot" "$?"
     stop_vm
     MACHINE="q35,accel=$ACCEL"
@@ -196,19 +216,18 @@ fi
 echo
 echo "== Admission (5 類分類 / 開機碟排除 / Signature) =="
 boot_vm "$WORK/adm.log"
-if wait_for "$BANNER" "$BOOT_TIMEOUT"; then
-    # 序列埠上的 root shell (root 無密碼)。crucible.sh 的 tmux 防呆在此以
-    # TMUX=1 滿足 —— 這條路徑上沒有 SSH 斷線風險。
-    send ""; sleep 2; send "root"; sleep 3
+if wait_for "$BOOTMARK" "$BOOT_TIMEOUT" && shell_alive adm; then
+    # serial-getty 已設為自動登入，這裡直接就是 root shell。
+    # crucible.sh 的 tmux 防呆以 TMUX=1 滿足 —— 序列埠上沒有 SSH 斷線風險。
     send "export TMUX=1 CRUCIBLE_LOG_DIR=/tmp/adm"
-    send "printf 'no\\n' | /opt/nas_crucible/crucible.sh \$(lsblk -dno NAME,TYPE | awk '\$2==\"disk\"{print \$1}' | tr '\\n' ' ') >/tmp/adm.out 2>&1; echo ADM_RC=\$?"
+    send "printf 'no\\n' | /opt/nas_crucible/crucible.sh \$(lsblk -dno NAME,TYPE | awk '\$2==\"disk\"{print \$1}' | tr '\\n' ' ') >/tmp/adm.out 2>&1; echo ADM\"\"_RC=\$?"
     wait_for "ADM_RC=" "$BOOT_TIMEOUT"
-    send "echo ===MANIFEST_BEGIN===; cat /tmp/adm/device_manifest.json | tr -d '\\n'; echo; echo ===MANIFEST_END==="
-    wait_for "===MANIFEST_END===" 120
+    send "echo MFB\"\"EGIN; cat /tmp/adm/device_manifest.json | tr -d '\\n'; echo; echo MFE\"\"ND"
+    wait_for "MFEND" 120
 
     MF="$WORK/manifest.json"
-    sed -n '/===MANIFEST_BEGIN===/,/===MANIFEST_END===/p' "$WORK/adm.log" \
-        | sed '1d;$d' | tr -d '\r' | head -1 > "$MF"
+    sed -n '/^MFBEGIN/,/^MFEND/p' "$WORK/adm.log" \
+        | sed '1d;$d' | tr -d '\r' | grep -m1 '^{' > "$MF"
     if jq -e . "$MF" >/dev/null 2>&1; then
         q() { jq -r "$1" "$MF" 2>/dev/null; }
         cls_of() { jq -r --arg s "$1" '.devices[] | select(.serial==$s) | .class' "$MF"; }
