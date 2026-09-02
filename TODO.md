@@ -64,8 +64,9 @@ Live 開機會讓「已掛載 / ZFS pool / LVM holders」三道既有防線同�
 - [x] fbterm + fonts-wqy-zenhei，tty1 自登入後進 tmux 跑 TUI
 - [x] 首次開機自動在開機碟尾端建立 ext4 Evidence Store 與小容量 FAT32 摘要分區
 - [x] 建不出來時降級 No-Persistence Mode，於 TUI 首頁、確認頁、進行中狀態列全程警告
-- [ ] Summary Report 渲染器：每顆碟判定完就從 logs/ 重新產生一次 (中途斷電也有部分摘要)
-- [ ] `build_info.json` 與 Evidence 帶上 commit hash (會動到五支 adapter 的 evidence 契約)
+- [x] Summary Report 渲染器：每顆碟判定完就從 logs/ 重新產生一次 (中途斷電也有部分摘要)
+- [x] `build_info.json` 與 Evidence 帶上 commit hash (改為寫進 exec_record 與 log dir，
+      不動五支 adapter 的版本化契約)
 - [x] `tests/test_build_contract.sh`：不建置的靜態檢查 (套件清單、grub 兩條開機路徑)
 
 ### M3: QEMU 測試層

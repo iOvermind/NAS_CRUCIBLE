@@ -26,6 +26,15 @@ source "$SCRIPT_DIR/lib/device_probe.sh"
 mkdir -p "$CRUCIBLE_LOG_DIR"
 MANIFEST="$CRUCIBLE_LOG_DIR/device_manifest.json"
 
+# Evidence 必須能回答「跑出這份結果的是哪一版程式碼」。ISO 建置時會在專案根目錄
+# 產生 build_info.json；複製一份進 log dir，讓每個 log 目錄自我描述，
+# 不必依賴外部對照表。commit 同時寫進 exec_record。
+if [ -f "$SCRIPT_DIR/build_info.json" ]; then
+    cp "$SCRIPT_DIR/build_info.json" "$CRUCIBLE_LOG_DIR/" 2>/dev/null || true
+    CRUCIBLE_BUILD_COMMIT=$(jq -r '.commit // "unknown"' "$SCRIPT_DIR/build_info.json" 2>/dev/null)
+    export CRUCIBLE_BUILD_COMMIT
+fi
+
 # --- Live 模式與 Boot Medium 識別 ---
 # Live 開機時，承載本工具的那顆隨身碟自己也是一顆 block device，會出現在
 # lsblk 的清單裡。抹掉它等於自殺，而且會連同跑到一半的 Evidence 一起銷毀。
@@ -396,4 +405,11 @@ for (( i=0; i<$num_devs; i++ )); do
 done
 echo "=========================================================================="
 
+
+# 最終摘要：即使 runner 全被 Global Abort 殺掉，這裡也會產出一份反映實況的報告。
+if [ -x "$SCRIPT_DIR/report_renderer.sh" ]; then
+    if "$SCRIPT_DIR/report_renderer.sh" "$CRUCIBLE_LOG_DIR" "${CRUCIBLE_REPORT_DIR:-$CRUCIBLE_LOG_DIR}" >/dev/null 2>&1; then
+        echo "📄 摘要報告: ${CRUCIBLE_REPORT_DIR:-$CRUCIBLE_LOG_DIR}/summary.html"
+    fi
+fi
 exit $CTRL_RC

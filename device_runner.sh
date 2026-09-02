@@ -38,7 +38,8 @@ PROFILE=$(jq -r '.execution_profile' "$POLICY_FILE")
 PHASES=(precheck baseline_snapshot smart_long_1 badblocks smart_long_2 final_snapshot verdict)
 
 jq -n --arg sn "$SERIAL" --arg prof "$PROFILE" --arg pn "$POL_NAME" --arg pv "$POL_VER" \
-  '{serial:$sn,execution:{profile:$prof,policy:{name:$pn,version:$pv},status:"STARTING",current_phase:"none",phases:{}}}' > "$EXEC_FILE"
+  --arg build "${CRUCIBLE_BUILD_COMMIT:-unknown}" \
+  '{serial:$sn,build:{commit:$build},execution:{profile:$prof,policy:{name:$pn,version:$pv},status:"STARTING",current_phase:"none",phases:{}}}' > "$EXEC_FILE"
 for p in "${PHASES[@]}"; do jq --arg p "$p" '.execution.phases[$p]={status:"PENDING"}' "$EXEC_FILE" > "$EXEC_FILE.tmp" && mv "$EXEC_FILE.tmp" "$EXEC_FILE"; done
 
 update_exec_status() {
@@ -226,4 +227,10 @@ else
 fi
 jq '.execution.current_phase="none"' "$EXEC_FILE" > "$EXEC_FILE.tmp" && mv "$EXEC_FILE.tmp" "$EXEC_FILE"
 
+
+# 每顆碟判定完就重繪一次摘要：3-5 天的測試中途斷電時，摘要裡至少有已經跑完的
+# 那幾顆。Summary Report 是 Evidence 的衍生物，重繪失敗絕不能影響測試結果。
+if [ -x "$SCRIPT_DIR/report_renderer.sh" ]; then
+  "$SCRIPT_DIR/report_renderer.sh" "$LOG_DIR" "${CRUCIBLE_REPORT_DIR:-$LOG_DIR}" >/dev/null 2>&1 || true
+fi
 exit "$final_rc"

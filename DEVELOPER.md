@@ -29,6 +29,7 @@ NAS_CRUCIBLE/
 ├── crucible_controller.sh         # Layer 1: 並行協調 (PGID 隔離與 Global Abort)
 ├── device_runner.sh               # Layer 2: 單碟 Phase FSM 執行器
 ├── verdict_engine.sh              # Layer 2: Fail-Closed 嚴格裁決邏輯
+├── report_renderer.sh             # Layer 2: Summary Report 渲染 (Evidence 的衍生物)
 ├── adapters/                      # Layer 3: 硬體接縫 (防腐層)
 │   ├── precheck_adapter.sh
 │   ├── snapshot_adapter.sh
@@ -180,3 +181,26 @@ Evidence Store 建不起來 (虛擬光碟開機、隨身碟無剩餘空間、分
 `crucible-evidence-store` 會掛 tmpfs 並寫出 `/run/crucible/no-persistence`，
 `crucible-autostart` 與 `crucible.sh` 都讀這個旗標並全程警告。三支腳本共用
 `CRUCIBLE_NOPERSIST_FLAG` 這一個環境變數，測試會檢查它們沒有各自寫死不同路徑。
+
+## 12. Summary Report 與可追溯性
+`report_renderer.sh <log_dir> [out_dir]` 是純資料處理器：讀 `device_manifest.json`、
+`exec_record_*.json` 與 `*_verdict_evidence.json`，產出 `summary.csv` 與
+`summary.html`。CSV 與 HTML 從同一個中間 JSON 產生 —— 兩種格式各算一次的話，
+遲早會出現「CSV 說 PASS、HTML 說 FAIL」。
+
+呼叫時機有兩處：`device_runner.sh` 每顆碟跑完重繪一次 (3-5 天的測試中途斷電時，
+摘要裡至少有已經跑完的那幾顆)，`crucible.sh` 在 controller 返回後再產一次最終版。
+兩處都是 best-effort —— **摘要是 Evidence 的衍生物，渲染失敗絕不能影響測試結果**。
+
+渲染器最關鍵的性質是「沒有 verdict evidence 的 ALLOW 裝置不得留白」：
+執行中標 `RUNNING`，其餘一律 `FAIL` 並說明原因。留白會被讀成沒問題。
+
+### 可追溯性
+ISO 建置時在專案根目錄產生 `build_info.json` (commit / 建置時間 / Debian 版本)。
+`crucible.sh` 啟動時把它複製進 log dir，並把 commit 寫進每顆碟的
+`exec_record_<serial>.json` 的 `.build.commit`。因此三天後拿到一份 Evidence，
+可以直接從 log 目錄回答「這是哪一版程式碼跑出來的」。
+
+五支 adapter 的 evidence **沒有**加上這個欄位：adapter evidence 是有版本號的
+契約 (見 §8)，為此同步改五支 adapter 加五份 policy 的版本，代價大於收益 ——
+log dir 層級的自我描述已經足夠回答重現問題。

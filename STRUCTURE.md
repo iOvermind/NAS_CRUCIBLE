@@ -78,6 +78,7 @@ graph TD
 | `crucible_controller.sh` | **進程協調器**。負責 `setsid` 隔離、追蹤 PGID，並在 `Ctrl+C` 時觸發 Global Abort，防止失控寫入。 |
 | `device_runner.sh` | **單碟狀態機**。管理 `precheck` → `baseline` → `smart` → `badblocks` → `final` 的嚴格管線與 Fail-Closed 狀態。 |
 | `verdict_engine.sh` | **裁決引擎**。純資料處理器，根據 Policy 規則對比兩次 JSON 快照，判斷是否 PASS。 |
+| `report_renderer.sh` | **摘要渲染器**。純資料處理器，把 manifest、exec_record 與 verdict evidence 彙整成 CSV/HTML。Summary Report 是 Evidence 的衍生物，可隨時重新產生；每顆碟判定完會重繪一次，中途斷電也留得住部分結果。 |
 | `adapters/*.sh` | **硬體防腐層 (Hardware Seam)**。將雜亂的 OS 指令轉譯為標準化、強型別的 JSON Evidence。長程檢測依協議分派：ATA/SCSI 走 `smartctl -t long`，NVMe 走 `nvme device-self-test`。 |
 | `policies/*.json` | **策略定義檔**。定義不同 Device Class (如 SAS_SSD) 的 timeout 與 SMART 判定規則 (Verdict Rules)。 |
 | `lib/device_probe.sh` | **共用探針**。硬碟可達性 (`is_device_accessible`)、ZFS pool 歸屬 (`dev_in_zpool`)、上層儲存堆疊佔用 (`dev_has_holders`)、Device Class 判定 (`classify_device`)。碟上既有資料簽章 (`dev_has_signature`)、開機媒體反查 (`detect_boot_medium`)、可移除判定 (`dev_is_removable`) 與 Live 環境判定 (`is_live_environment`)。這些判斷同時被 `crucible.sh` 的 admission 與 `precheck_adapter` 使用，必須維持單一來源。 |
