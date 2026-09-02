@@ -27,36 +27,57 @@
 
 ## Roadmap: 可開機映像 (Bootable Burn-in Media)
 
-**目標**：插 USB 開機即進入 NAS_CRUCIBLE，與主系統完全隔離，操作體驗類似 memtest86。
+**目標**：插 USB 開機即進入 NAS_CRUCIBLE，與主系統完全隔離，可對 SATA / SAS / NVMe
+的 HDD 與 SSD 做燒機，BIOS 與 UEFI 皆可開機。操作體驗類似 memtest86。
 
-### 架構決定：走 minimal Linux live image，不走裸機 EFI application
-memtest86 是不含作業系統的 EFI 應用程式，自行驅動硬體。若照抄該架構，等同要用 C
-重寫 NVMe/AHCI 驅動、SMART 命令與 badblocks，並且會失去 `lsblk` / `findmnt` /
-`zpool` 這些 admission 階段賴以判斷「此碟能否抹除」的安全檢查——與本專案的
-Fail-Closed 核心直接抵觸。因此採用極簡 Linux live image (GParted Live / Clonezilla 路線)，
-使用者體驗相同，但整套 Bash + smartmontools 工具鏈可原封不動沿用。
+### 架構決定
+走極簡 Linux live image，不走裸機 EFI application。memtest86 是不含作業系統的 EFI
+應用程式；照抄該架構等同要用 C 重寫 NVMe/AHCI 驅動與 SMART 命令，並且會失去
+`lsblk` / `findmnt` 這些 admission 賴以判斷「此碟能否抹除」的檢查 —— 與 Fail-Closed
+核心直接抵觸。
 
-註：「打包成單一二進位」對 Bash 專案沒有意義，最終產物是 `.img` / `.iso`。
+已定案的技術選擇記錄於 ADR：
+- [0001](docs/adr/0001-signature-as-primary-admission-defence.md) 以碟上靜態 Signature 作為 admission 主防線
+- [0002](docs/adr/0002-debian-stable-signed-boot-chain.md) Debian stable + 官方簽章開機鏈
+- [0003](docs/adr/0003-first-boot-auto-partition-and-no-persistence-fallback.md) 首次開機自動建 Evidence Store 與 No-Persistence 降級
 
-### 候選建置方式
-- **Alpine + `mkimage.sh`**：約 80-150MB，開機快；apk 有 smartmontools / nvme-cli / jq /
-  e2fsprogs。風險：busybox 的 `lsblk` / `findmnt` 功能較弱，`precheck_adapter` 可能需調整。
-- **Debian + `mkosi` 或 `debootstrap` + `systemd-boot`**：約 300-500MB；工具鏈與現行開發
-  環境完全一致，`precheck_adapter` 無須修改，ZFS 支援較完整。
+其餘定案：Live 內 tty1 自登入 → fbterm (中文字型) → tmux → TUI，tty2-6 保留 shell；
+v1 完全無網路；只支援直通裝置，RAID 卡後面的實體碟明確不支援；ISO 內程式碼一律
+取自 `git archive HEAD` 並寫入 `build_info.json`。
 
-### 開工前必須先解決的設計問題
-- [ ] **Evidence 持久化**：live rootfs 在 RAM，重開機證據全失。3-5 天的測試不可接受。
-      需在 USB 上規劃持久分區掛載至 `logs/`，並處理掛載失敗時的 Fail-Closed 行為。
-- [x] **live 環境下的 ZFS admission 衝突**：已由 `lib/device_probe.sh` 的
-      `dev_in_zpool` 解決。判斷依據改為「`zpool` 指令是否存在」：指令不存在
-      代表系統上不可能有已匯入的 pool，回傳「確定不屬於」而非查詢失敗；
-      只有在 `zpool` 可用但查詢失敗時才回傳「無法判定」並維持 rc=2。
-      對線上碟的保護沒有鬆脫 —— 有 ZFS 的環境行為完全不變。
-- [ ] **live image 是否安裝 zfsutils**：承上，若 live image 內裝了 `zpool`
-      但沒有匯入任何 pool，`zpool status` 的回傳碼需要實機確認 (無 pool 時
-      是否為 0)。若非 0 則會退回「無法判定」而擋下所有碟。尚未實機驗證。
-- [ ] **`tmux` / `screen` 強制檢查**：console 上無 SSH 斷線風險，此防呆失去意義，
-      但仍應保留多 TTY 以便觀察。啟動流程需改寫。
-- [ ] **Secure Boot**：自建 kernel 無簽章，開啟 SB 的機器無法開機。
-      需決定走 shim + 自簽金鑰，或於文件中要求使用者關閉 SB。
+### M1: 安全底座 (已完成)
+Live 開機會讓「已掛載 / ZFS pool / LVM holders」三道既有防線同時歸零，必須先補上
+不依賴執行時狀態的防線，再談開機映像。
+- [x] `dev_has_signature`：以 FSTYPE / PTTYPE 判定碟上是否曾被寫入資料
+- [x] `detect_boot_medium` / `dev_is_removable` / `is_live_environment`：開機媒體自我排除，
+      反查失敗時退化為「排除全部 removable」
+- [x] admission 改為部分放行：問題碟標 `decision=BLOCK` 並記錄 `block_reason`，
+      其餘照跑，不再整批 `exit 2`
+- [x] Override：逐碟輸入序號才能解除 Signature 造成的封鎖，非互動情境一律維持封鎖
+- [x] 序號重複改為兩顆都擋 (證據歸屬無法分辨)，而非整批中止
+- [x] `tests/test_admission.sh` 鎖住上述全部行為
 
+### M2: 可開機映像
+- [ ] `build/` 目錄：Dockerfile + build_iso.sh，宿主只需 docker
+- [ ] Debian stable live-build，含 smartmontools / nvme-cli / jq / whiptail / util-linux
+- [ ] BIOS (isolinux) + UEFI (grub-efi) 雙開機，`shim-signed` 支援 Secure Boot
+- [ ] fbterm + fonts-wqy-zenhei，tty1 自登入後進 tmux 跑 TUI
+- [ ] 首次開機自動在開機碟尾端建立 ext4 Evidence Store 與小容量 FAT32 摘要分區
+- [ ] 建不出來時降級 No-Persistence Mode，於 TUI 首頁、確認頁、進行中狀態列全程警告
+- [ ] Summary Report 渲染器：每顆碟判定完就從 logs/ 重新產生一次 (中途斷電也有部分摘要)
+- [ ] `build_info.json` 與 Evidence 帶上 commit hash (會動到五支 adapter 的 evidence 契約)
+- [ ] `tests/test_build_contract.sh`：不建置的靜態檢查 (套件清單、grub 兩條開機路徑)
+
+### M3: QEMU 測試層
+- [ ] `tests/run_iso.sh`：UEFI (OVMF) / Secure Boot / Legacy BIOS 三條開機路徑都要進得到 TUI
+- [ ] 驗自動建分區並在重開機後仍掛得到
+- [ ] 驗開機碟不出現在可測清單
+- [ ] 驗預先寫入 ext4 / zfs_member 簽章的虛擬碟被標 HAS DATA 並 BLOCK
+- [ ] 以 AHCI (兩種 rotation rate) / megasas / nvme 驗 5 類 Device Class 分類與 policy 匹配
+- [ ] 宿主需額外安裝 qemu-system-x86 與 OVMF
+
+### 待實機驗證
+- [ ] fbterm 在伺服器 BMC 顯示卡 (ASPEED 等) 上的 KMS framebuffer 相容性；
+      起不來時需 fallback 回純 tty
+- [ ] `✅❌⚠️` 這些 emoji 的 glyph 覆蓋：fonts-wqy-zenhei 不含，需另加單色 emoji
+      字型，仍缺則改用 ASCII 標記

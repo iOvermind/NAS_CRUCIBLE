@@ -82,3 +82,58 @@ Adapter **必須**把 Evidence 寫到這個路徑，否則不論硬體結果如�
 - `device_runner.sh`
 - `crucible.sh` (如果印出版號)
 
+
+## 9. Admission 防線與 Override
+`crucible.sh` 的 admission 有五道，任何一道不過只會把該碟標成
+`decision=BLOCK` 並記下 `block_reason`，其餘裝置照常受測 —— 不再整批 `exit 2`。
+判定結果一律寫進 `device_manifest.json`，被擋本身就是需要留存的紀錄。
+
+| 順序 | 檢查 | block_reason | 可 Override |
+| :--- | :--- | :--- | :--- |
+| 1 | 裝置節點存在 | `NOT_A_BLOCK_DEVICE` | 否 |
+| 2 | 開機媒體自我排除 | `BOOT_MEDIUM` / `REMOVABLE_BOOT_UNKNOWN` | 否 |
+| 3 | 掛載 / ZFS / holders | `MOUNTED` / `ZFS_POOL_MEMBER` / `ZFS_QUERY_FAILED` / `STORAGE_HOLDERS` | 否 |
+| 4 | 身分與 Policy | `IDENTITY_UNREADABLE` / `NO_POLICY` / `DUPLICATE_SERIAL` | 否 |
+| 5 | 碟上 Signature | `HAS_DATA` / `SIGNATURE_QUERY_FAILED` | **是** |
+
+### 為什麼需要 Signature 這一道
+前三道判斷的全是「執行時狀態」。Live Image 開機時主系統沒有啟動，沒有東西被掛載、
+沒有 pool 被匯入、沒有 md/LVM 被組裝 —— 三道防線同時歸零，一顆服役中的資料碟會
+看起來跟全新空碟一模一樣。`dev_has_signature` 讀的是碟上的靜態事實
+(FSTYPE / PTTYPE)，不依賴任何執行時狀態，因此 Live 與已安裝環境行為一致。
+見 [ADR-0001](docs/adr/0001-signature-as-primary-admission-defence.md)。
+
+### Override 的形狀
+`HAS_DATA` 是唯一可解除的一條，解除方式是**逐碟輸入該碟序號**。刻意不提供全域
+`--force`：單一旗標關掉整條防線，正是本專案已經修過數次的 fail-open 形狀。
+`stdin` 不是 tty 時一律維持封鎖，避免這條路徑被寫進排程腳本變成預設值。
+解除後 manifest 記 `overridden=true`，最終報表帶 `(OVERRIDE)` 標記。
+
+### precheck_adapter 為何不重複檢查 Signature
+既有的深度防禦是為了 TOCTOU：admission 到破壞性階段之間硬碟可能被抽換。但那個
+情境已由 `precheck_adapter` 的序號比對 (`IDENTITY_MISMATCH`) 攔下，而簽章不會憑空
+出現。被 Override 的碟本來就帶著簽章，在 precheck 再驗一次只會把它們全部擋掉，
+因此需要把 override 旗標一路傳進 runner —— 代價大於收益，故不做。
+
+### 新增的探針 (`lib/device_probe.sh`)
+| 函式 | 用途 | 測試接縫 |
+| :--- | :--- | :--- |
+| `dev_has_signature` | 碟上是否有檔案系統或成員標記。0=有 / 1=無 / 2=無法判定 | PATH 上的 `lsblk` |
+| `dev_is_removable` | 是否為可移除或 USB 裝置 | `SYSFS_ROOT`、PATH 上的 `lsblk` |
+| `is_live_environment` | 是否跑在 Live Image 中 | `CRUCIBLE_LIVE_DIR`、`CRUCIBLE_CMDLINE_FILE` |
+| `detect_boot_medium` | 反查承載 Live Image 的整顆實體碟 | `SYSFS_ROOT`、PATH 上的 `findmnt` / `lsblk` |
+
+`detect_boot_medium` 回傳 1 代表**反查失敗**，呼叫端必須退化為「排除全部 removable
+裝置」，絕不可當成「沒有開機碟」。
+
+## 10. 測試分層
+| 層 | 檔案 | 需要什麼 | 何時跑 |
+| :--- | :--- | :--- | :--- |
+| 純軟體迴歸 | `tests/run_all.sh` | 無 (stub 攔截硬體) | **每次提交前必跑** |
+| 建置靜態檢查 | `tests/test_build_contract.sh` (M2) | 無 (不實際建置) | 每次提交前 |
+| 端到端開機驗證 | `tests/run_iso.sh` (M3) | docker + qemu + OVMF | 手動 / release 前 |
+
+QEMU 層驗的是 stub 永遠測不到的東西：BIOS / UEFI / Secure Boot 三條開機路徑、
+開機碟自我排除、自動建分區與重開機後重掛、以及用 AHCI / megasas / nvme 模擬出來的
+5 類 Device Class 分類。注意 QEMU 模擬碟的 SMART 支援很薄，`smartctl -t long` 與
+NVMe `device-self-test` 在 VM 內基本上跑不起來 —— 那部分的覆蓋留在 `run_all.sh`。

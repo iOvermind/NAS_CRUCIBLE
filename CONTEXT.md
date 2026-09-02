@@ -31,3 +31,33 @@ _Avoid_: Force stop, Kill all
 **TUI (Terminal User Interface)**:
 終端機互動式介面。當 `crucible.sh` 不帶參數執行時，提供 checklist 形式的硬碟選擇器，自動掃描系統區塊裝置並顯示裝置資訊與安全標示。
 _Avoid_: Interactive mode, Menu
+
+### 可開機媒體 (Bootable Media)
+
+**Live Image**:
+把 NAS_CRUCIBLE 與其工具鏈完整封裝、可寫入隨身碟並以 BIOS 或 UEFI 開機的最小 Linux 映像。
+_Avoid_: Live CD, Bootable USB, 開機碟
+
+**Boot Medium**:
+承載 Live Image、且系統當下正由它開機的那一顆實體裝置。它與其上所有分區永遠不得成為受測對象。
+_Avoid_: USB, 開機隨身碟, 系統碟
+
+**Evidence Store**:
+Live 環境下用來保存 Evidence 的持久儲存區，以標籤辨識而非以裝置路徑辨識。
+_Avoid_: Persistence partition, 資料碟, logs 分區
+
+**Summary Report**:
+給人閱讀的判定摘要。它是 Evidence 的衍生物，任何時候都能從 Evidence 重新產生，本身不是證據。
+_Avoid_: Report file, 結果檔, 報表
+
+**No-Persistence Mode**:
+Evidence Store 無法建立或掛載時的降級狀態。此狀態下 Evidence 只存在於記憶體，斷電即失，必須全程對操作員明示。
+_Avoid_: RAM mode, tmpfs mode, 暫存模式
+
+**Signature**:
+裝置上可被靜態讀出的檔案系統或儲存堆疊成員標記，代表這顆碟曾經被寫入資料。與「是否正在被使用」無關。
+_Avoid_: Filesystem, Metadata, 殘留資料
+
+**Override**:
+操作員逐碟輸入該碟序號，明確解除由 Signature 造成的 BLOCK。這是系統中唯一一條解除防線的路徑。
+_Avoid_: Force, Bypass, 略過, 強制模式
