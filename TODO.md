@@ -70,12 +70,12 @@ Live 開機會讓「已掛載 / ZFS pool / LVM holders」三道既有防線同�
 - [x] `tests/test_build_contract.sh`：不建置的靜態檢查 (套件清單、grub 兩條開機路徑)
 
 ### M3: QEMU 測試層
-- [ ] `tests/run_iso.sh`：UEFI (OVMF) / Secure Boot / Legacy BIOS 三條開機路徑都要進得到 TUI
-- [ ] 驗自動建分區並在重開機後仍掛得到
-- [ ] 驗開機碟不出現在可測清單
-- [ ] 驗預先寫入 ext4 / zfs_member 簽章的虛擬碟被標 HAS DATA 並 BLOCK
-- [ ] 以 AHCI (兩種 rotation rate) / megasas / nvme 驗 5 類 Device Class 分類與 policy 匹配
-- [ ] 宿主需額外安裝 qemu-system-x86 與 OVMF
+- [x] `tests/run_iso.sh`：UEFI (OVMF) / Secure Boot / Legacy BIOS 三條開機路徑都要進得到 TUI
+- [x] 驗自動建分區並在重開機後仍掛得到
+- [x] 驗開機碟不出現在可測清單
+- [x] 驗預先寫入 ext4 簽章的虛擬碟被標 HAS_DATA 並 BLOCK
+- [x] 以 AHCI (兩種 rotation rate) / megasas / nvme 驗 5 類 Device Class 分類與 policy 匹配
+- [ ] **尚未實跑**：宿主需先 `sudo apt install qemu-system-x86 ovmf`
 
 ### 待實機驗證
 - [ ] fbterm 在伺服器 BMC 顯示卡 (ASPEED 等) 上的 KMS framebuffer 相容性；

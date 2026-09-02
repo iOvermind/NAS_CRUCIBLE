@@ -48,6 +48,10 @@ check "grub.cfg (UEFI) 帶 boot=live"      "$(has "$B/boot/grub.cfg" 'boot=live'
 check "isolinux.cfg (BIOS) 帶 boot=live"  "$(has "$B/boot/isolinux.cfg" 'boot=live'; echo $?)"
 check "grub.cfg 有 nomodeset 相容模式 (fbterm 起不來時的退路)" \
       "$(has "$B/boot/grub.cfg" 'nomodeset'; echo $?)"
+# 序列埠 console 是伺服器透過 BMC redirection 觀察開機過程的唯一途徑，
+# tests/run_iso.sh 也靠它驗證開機路徑。少了它，M3 完全沒辦法觀察 VM 內部。
+check "grub.cfg 帶序列埠 console"     "$(has "$B/boot/grub.cfg" 'console=ttyS0'; echo $?)"
+check "isolinux.cfg 帶序列埠 console" "$(has "$B/boot/isolinux.cfg" 'console=ttyS0'; echo $?)"
 check "build.sh 掛 BIOS El Torito 開機映像"     "$(has "$B/in_container/build.sh" '-eltorito-boot'; echo $?)"
 check "build.sh 掛 UEFI El Torito 開機映像"     "$(has "$B/in_container/build.sh" '-eltorito-alt-boot'; echo $?)"
 check "build.sh 產生 isohybrid MBR (dd 到隨身碟後 BIOS 可開機)" \
@@ -122,6 +126,8 @@ UNIT="$B/rootfs/etc/systemd/system/crucible-evidence-store.service"
 check "tty1 自動登入後進 crucible-autostart" "$(has "$AL" 'crucible-autostart'; echo $?)"
 check "Evidence Store 必須早於 tty1 起來"     "$(has "$UNIT" 'Before=getty@tty1.service'; echo $?)"
 check "autostart 走 fbterm (中文顯示)"        "$(has "$AS" 'fbterm'; echo $?)"
+check "序列埠也自動登入 (BMC redirection 與 run_iso.sh 都需要)" \
+      "$([ -f "$B/rootfs/etc/systemd/system/serial-getty@ttyS0.service.d/autologin.conf" ]; echo $?)"
 check "fbterm 不可用時退回純 tty"             "$(has "$AS" '/dev/fb0'; echo $?)"
 check "autostart 在 tmux 內執行 crucible.sh"  "$(has "$AS" 'tmux new-session'; echo $?)"
 # 這一條最容易漏：不指定的話 crucible.sh 會把 log 寫進 live rootfs (RAM)，

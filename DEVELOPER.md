@@ -131,8 +131,8 @@ Adapter **必須**把 Evidence 寫到這個路徑，否則不論硬體結果如�
 | 層 | 檔案 | 需要什麼 | 何時跑 |
 | :--- | :--- | :--- | :--- |
 | 純軟體迴歸 | `tests/run_all.sh` | 無 (stub 攔截硬體) | **每次提交前必跑** |
-| 建置靜態檢查 | `tests/test_build_contract.sh` (M2) | 無 (不實際建置) | 每次提交前 |
-| 端到端開機驗證 | `tests/run_iso.sh` (M3) | docker + qemu + OVMF | 手動 / release 前 |
+| 建置靜態檢查 | `tests/test_build_contract.sh` | 無 (不實際建置) | 每次提交前 (已納入 run_all.sh) |
+| 端到端開機驗證 | `tests/run_iso.sh` | qemu-system-x86 + ovmf + 一顆已建好的 ISO | 手動 / release 前 |
 
 QEMU 層驗的是 stub 永遠測不到的東西：BIOS / UEFI / Secure Boot 三條開機路徑、
 開機碟自我排除、自動建分區與重開機後重掛、以及用 AHCI / megasas / nvme 模擬出來的
