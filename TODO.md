@@ -77,8 +77,56 @@ Live 開機會讓「已掛載 / ZFS pool / LVM holders」三道既有防線同�
 - [x] 以 AHCI (兩種 rotation rate) / megasas / nvme 驗 5 類 Device Class 分類與 policy 匹配
 - [ ] **尚未實跑**：宿主需先 `sudo apt install qemu-system-x86 ovmf`
 
-### 待實機驗證
+## 現況 (2026-09-02)
+
+M1 / M2 / M3 的程式碼與測試都已完成並提交。`./tests/run_all.sh` 全綠
+(9 支測試、約 180 個斷言，不需要任何硬體)。
+
+### 已在 QEMU 實機模擬中驗證通過
+以 commit `928455e` 建出的 ISO 實際開機驗證，下列全部通過：
+
+- **Legacy BIOS (SeaBIOS)** 開機 → 進到 userspace → 序列埠取得 root shell
+- **UEFI (OVMF)** 開機 → 同上
+- **UEFI + Secure Boot** (OVMF.secboot + 微軟金鑰)：shim → 簽章 grub →
+  Debian 官方 kernel 整條鏈通過
+- **Evidence Store**：首次開機在隨身碟尾端建立分區成功
+  (`/dev/sde4 -> /var/lib/crucible/logs`)，未進入 No-Persistence Mode
+- **持久化**：重新開機後掛回同一個 Evidence Store，未重建
+- **Admission (VM 內實際執行 crucible.sh 的輸出)**：
+  - 開機媒體 `/dev/sde` → `BLOCKED: BOOT_MEDIUM`
+  - 寫入 ext4 簽章的碟 → `BLOCKED: HAS_DATA`
+  - 非互動情境不提供 Override
+  - `SN-SASHDD` → `SAS_HDD` (megasas 直通)
+  - `SN-SATASSD` → `SATA_SSD` (rotation_rate=1)
+  - `SN-SATAHDD` → `SATA_HDD`
+  - `SN-NVME` → `NVME_SSD`
+  - 四顆合格碟正確匹配到 `HDD_FULL_BURNIN` / `SSD_WEAR_BURNIN` profile
+
+### 唯一尚未實跑驗證的一項
+- [ ] **tty1 自動進入選碟畫面** —— 修正已提交 (`1a6b943`)，但**尚未用新 ISO 實跑**。
+
+  問題是 live-config 會在開機時於 `/run/systemd/generator/` 產生
+  `live-config_autologin.conf` (`--autologin user`)，systemd 依檔名排序套用
+  drop-in，我們原本的 `autologin.conf` 排在它前面而被整個蓋掉 —— ISO 開得起來、
+  Evidence Store 也建得好，就是主程式不會啟動，開機後停在 live-config 的 user
+  帳號 shell。已改名為 `zz-crucible-autologin.conf` 並加上排序斷言，
+  但驗證用的第四次建置被中斷，`build/out/` 目前是空的。
+
+  **接續步驟**：
+  ```bash
+  ./build/build_iso.sh          # 約 19 分鐘，需要 docker (--privileged)
+  ./tests/run_iso.sh            # 約 7 分鐘，需要 qemu-system-x86 + ovmf
+  ```
+  預期 11 條斷言全過。失敗時序列埠 log 會保留在 `build/out/iso-test-logs/`。
+
+  註：本機的 `docker run --privileged` 在 Claude Code 的沙箱下會卡住，
+  需要在一般終端機執行，或以 `!` 前綴在對話中執行。
+
+### 實機 (非 QEMU) 仍待驗證
 - [ ] fbterm 在伺服器 BMC 顯示卡 (ASPEED 等) 上的 KMS framebuffer 相容性；
-      起不來時需 fallback 回純 tty
-- [ ] `✅❌⚠️` 這些 emoji 的 glyph 覆蓋：fonts-wqy-zenhei 不含，需另加單色 emoji
-      字型，仍缺則改用 ASCII 標記
+      起不來時需 fallback 回純 tty (程式已有此分支，未在真硬體上驗過)
+- [ ] `✅❌⚠️` 這些 emoji 的 glyph 覆蓋：fonts-wqy-zenhei 不含，需另加單色
+      emoji 字型，仍缺則改用 ASCII 標記
+- [ ] 真實 SAS HBA (mpt3sas / megaraid_sas IT mode) 上的完整燒機流程
+- [ ] NVMe `device-self-test` 的完整流程 (QEMU 模擬碟的 SMART 支援太薄，測不到)
+
