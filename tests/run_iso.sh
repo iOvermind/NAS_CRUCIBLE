@@ -160,10 +160,19 @@ shell_alive() {
 }
 
 # BOOTMARK 出現時 serial-getty 通常還沒登入完，這時送出去的指令會被 login
-# 程序吃掉而不是交給 shell。先等提示字元出現再說話。
+# 程序吃掉而不是交給 shell。
+#
+# 不能改成「等提示字元出現再說話」：實測 bash 在序列埠上要收到輸入才會把提示
+# 字元吐出來，空等只會逾時。改為反覆送、每次短等，早期幾次被 login 吃掉，
+# 之後就會落進 shell。
 wait_shell() {
-    wait_for "root@nas-crucible" 180 || return 1
-    shell_alive "$1"
+    local i
+    for i in 1 2 3 4 5 6; do
+        send ""
+        send "echo CRUCIBLE\"\"_SHELL_OK_$1"
+        wait_for "CRUCIBLE_SHELL_OK_$1" 20 && return 0
+    done
+    return 1
 }
 
 # ============================================ 1. Legacy BIOS 開機路徑 ==

@@ -126,6 +126,10 @@ check "Evidence 分區用 ext4 (3-5 天連續寫入需要 journaling)" \
 check "摘要分區用 FAT32 (插到任何電腦都讀得到)" "$(has "$ES" 'mkfs.vfat'; echo $?)"
 check "摘要分區失敗不得影響 Evidence 保存" \
       "$(grep -q '不影響 Evidence 保存' "$ES"; echo $?)"
+# FAT 卷標上限 11 字元，超過 mkfs.vfat 直接拒絕。這種失敗很安靜 ——
+# ext4 那半邊照常建好，只有摘要分區默默不見 (QEMU 端到端測試抓到)。
+rpt_label=$(sed -n 's/^RPT_LABEL=\(.*\)$/\1/p' "$ES" | head -1)
+check "摘要分區的 FAT 卷標不超過 11 字元 (實得 $rpt_label, ${#rpt_label} 字元)" "$([ -n "$rpt_label" ] && [ "${#rpt_label}" -le 11 ]; echo $?)"
 
 echo
 echo "== 開機流程 =="

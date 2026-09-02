@@ -18,7 +18,9 @@ set -u
 
 CRUCIBLE_ROOT=${CRUCIBLE_ROOT:-/opt/nas_crucible}
 DATA_LABEL=CRUCIBLE_DATA
-RPT_LABEL=CRUCIBLE_RPT
+# FAT 的卷標上限是 11 個字元，CRUCIBLE_RPT (12) 會讓 mkfs.vfat 直接拒絕 ——
+# 這是 QEMU 端到端測試抓到的：ext4 那半邊建好了，摘要分區卻靜靜地失敗。
+RPT_LABEL=CRUCIBLERPT
 DATA_MNT=${CRUCIBLE_DATA_MNT:-/var/lib/crucible/logs}
 RPT_MNT=${CRUCIBLE_RPT_MNT:-/var/lib/crucible/report}
 NOPERSIST_FLAG=${CRUCIBLE_NOPERSIST_FLAG:-/run/crucible/no-persistence}
