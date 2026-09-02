@@ -58,15 +58,15 @@ Live 開機會讓「已掛載 / ZFS pool / LVM holders」三道既有防線同�
 - [x] `tests/test_admission.sh` 鎖住上述全部行為
 
 ### M2: 可開機映像
-- [ ] `build/` 目錄：Dockerfile + build_iso.sh，宿主只需 docker
-- [ ] Debian stable live-build，含 smartmontools / nvme-cli / jq / whiptail / util-linux
-- [ ] BIOS (isolinux) + UEFI (grub-efi) 雙開機，`shim-signed` 支援 Secure Boot
-- [ ] fbterm + fonts-wqy-zenhei，tty1 自登入後進 tmux 跑 TUI
-- [ ] 首次開機自動在開機碟尾端建立 ext4 Evidence Store 與小容量 FAT32 摘要分區
-- [ ] 建不出來時降級 No-Persistence Mode，於 TUI 首頁、確認頁、進行中狀態列全程警告
+- [x] `build/` 目錄：Dockerfile + build_iso.sh，宿主只需 docker
+- [x] Debian stable debootstrap，含 smartmontools / nvme-cli / jq / whiptail / util-linux
+- [x] BIOS (isolinux) + UEFI (grub-efi) 雙開機，`shim-signed` 支援 Secure Boot
+- [x] fbterm + fonts-wqy-zenhei，tty1 自登入後進 tmux 跑 TUI
+- [x] 首次開機自動在開機碟尾端建立 ext4 Evidence Store 與小容量 FAT32 摘要分區
+- [x] 建不出來時降級 No-Persistence Mode，於 TUI 首頁、確認頁、進行中狀態列全程警告
 - [ ] Summary Report 渲染器：每顆碟判定完就從 logs/ 重新產生一次 (中途斷電也有部分摘要)
 - [ ] `build_info.json` 與 Evidence 帶上 commit hash (會動到五支 adapter 的 evidence 契約)
-- [ ] `tests/test_build_contract.sh`：不建置的靜態檢查 (套件清單、grub 兩條開機路徑)
+- [x] `tests/test_build_contract.sh`：不建置的靜態檢查 (套件清單、grub 兩條開機路徑)
 
 ### M3: QEMU 測試層
 - [ ] `tests/run_iso.sh`：UEFI (OVMF) / Secure Boot / Legacy BIOS 三條開機路徑都要進得到 TUI

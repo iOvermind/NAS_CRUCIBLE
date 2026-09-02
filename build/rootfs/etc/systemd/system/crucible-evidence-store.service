@@ -1,0 +1,15 @@
+[Unit]
+Description=NAS_CRUCIBLE Evidence Store (persistent logs on the boot medium)
+DefaultDependencies=no
+After=systemd-udev-settle.service local-fs.target
+Wants=systemd-udev-settle.service
+Before=getty@tty1.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/crucible-evidence-store
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

@@ -137,3 +137,46 @@ QEMU 層驗的是 stub 永遠測不到的東西：BIOS / UEFI / Secure Boot 三�
 開機碟自我排除、自動建分區與重開機後重掛、以及用 AHCI / megasas / nvme 模擬出來的
 5 類 Device Class 分類。注意 QEMU 模擬碟的 SMART 支援很薄，`smartctl -t long` 與
 NVMe `device-self-test` 在 VM 內基本上跑不起來 —— 那部分的覆蓋留在 `run_all.sh`。
+
+## 11. 建置可開機映像 (build/)
+```bash
+./build/build_iso.sh                 # 產物在 build/out/
+./build/build_iso.sh --allow-dirty   # 開發驗證用，ISO 會標記 dirty
+```
+宿主唯一需要的依賴是 `docker` 與 `git`；`debootstrap` / `xorriso` / `mksquashfs`
+全部只存在於容器內。程式碼一律取自 `git archive HEAD`，working tree 不乾淨時
+預設拒絕建置 —— 交出去的 ISO 必須對應到一個 commit，否則三天後拿到異常
+Evidence 時無從重現。
+
+| 檔案 | 職責 |
+| :--- | :--- |
+| `build/build_iso.sh` | 宿主入口。dirty 檢查、`git archive`、`docker build` / `docker run --privileged` |
+| `build/Dockerfile` | 建置環境 (debian:stable + debootstrap/xorriso/mksquashfs/mtools) |
+| `build/in_container/build.sh` | debootstrap → 裝套件 → 植入程式碼 → squashfs → 組 BIOS/UEFI 開機路徑 → hybrid ISO |
+| `build/in_container/packages.list` | 套件清單**單一來源**，`test_build_contract.sh` 逐項檢查 |
+| `build/boot/` | `grub.cfg` (UEFI) 與 `isolinux.cfg` (BIOS)，兩者都必須帶 `boot=live` |
+| `build/rootfs/` | 疊進 live rootfs 的檔案 (autologin、Evidence Store、autostart、fbterm 設定) |
+
+### 開機鏈
+BIOS 走 isolinux，UEFI 走 `shim-signed` → `grub-efi-amd64-signed` → Debian 官方
+簽章 kernel，因此開著 Secure Boot 的機器不必進 BIOS 改設定。ISO 以
+`-isohybrid-mbr` 與 `-isohybrid-gpt-basdat` 產生，`dd` 進隨身碟後兩種韌體都能開機，
+且尾端仍留有可加分區的空間給 Evidence Store。**這條開機鏈不能換成自編 kernel**，
+換了就失去簽章。見 [ADR-0002](docs/adr/0002-debian-stable-signed-boot-chain.md)。
+
+### 開機後的流程
+```
+systemd
+ ├─ crucible-evidence-store.service   建立/掛載 Evidence Store (Before=getty@tty1)
+ └─ getty@tty1 (autologin root)
+     └─ crucible-autostart            fbterm -> tmux -> crucible.sh
+```
+`crucible-autostart` 會把 `CRUCIBLE_LOG_DIR` 指到 Evidence Store 的掛載點。
+**漏掉這一步的話 Evidence 會寫進 live rootfs (RAM)**，持久分區等於白建 ——
+`test_build_contract.sh` 有一條專門盯這件事。
+
+### No-Persistence Mode
+Evidence Store 建不起來 (虛擬光碟開機、隨身碟無剩餘空間、分區表寫入失敗) 時，
+`crucible-evidence-store` 會掛 tmpfs 並寫出 `/run/crucible/no-persistence`，
+`crucible-autostart` 與 `crucible.sh` 都讀這個旗標並全程警告。三支腳本共用
+`CRUCIBLE_NOPERSIST_FLAG` 這一個環境變數，測試會檢查它們沒有各自寫死不同路徑。

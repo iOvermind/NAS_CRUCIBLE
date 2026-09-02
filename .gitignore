@@ -5,3 +5,6 @@ logs/
 /*.json
 /*.log
 *_selftest.txt
+
+# ISO 建置產物
+build/out/

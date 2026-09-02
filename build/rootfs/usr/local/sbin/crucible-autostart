@@ -1,0 +1,54 @@
+#!/bin/bash
+# =========================================================================
+# tty1 自動登入後的啟動流程：fbterm -> tmux -> crucible.sh
+#
+# fbterm 負責繁體中文顯示 (純 framebuffer tty 沒有 CJK 字型，中文一律變方塊)。
+# tmux 保留 detach / 多 pane / scrollback，也讓 crucible.sh 既有的
+# 「必須在 tmux 內執行」防呆不必為了 Live 開特例。
+# =========================================================================
+set -u
+
+CRUCIBLE_ROOT=${CRUCIBLE_ROOT:-/opt/nas_crucible}
+DATA_MNT=${CRUCIBLE_DATA_MNT:-/var/lib/crucible/logs}
+RPT_MNT=${CRUCIBLE_RPT_MNT:-/var/lib/crucible/report}
+NOPERSIST_FLAG=${CRUCIBLE_NOPERSIST_FLAG:-/run/crucible/no-persistence}
+
+export CRUCIBLE_LOG_DIR="$DATA_MNT/$(date +%Y%m%d_%H%M%S)"
+export CRUCIBLE_REPORT_DIR="$RPT_MNT"
+mkdir -p "$CRUCIBLE_LOG_DIR" "$CRUCIBLE_REPORT_DIR" 2>/dev/null
+
+clear
+echo "=========================================================================="
+echo "                  NAS_CRUCIBLE 儲存裝置燒機測試"
+if [ -f "$CRUCIBLE_ROOT/build_info.json" ] && command -v jq >/dev/null 2>&1; then
+    echo "                  build $(jq -r '.commit_short // "unknown"' "$CRUCIBLE_ROOT/build_info.json") ($(jq -r '.built_at // "?"' "$CRUCIBLE_ROOT/build_info.json"))"
+fi
+echo "=========================================================================="
+echo ""
+echo "  tty1  本畫面 (測試主控)        切換: Alt+F1"
+echo "  tty2-tty6  診斷用 shell        切換: Alt+F2 ~ Alt+F6"
+echo ""
+if [ -f "$NOPERSIST_FLAG" ]; then
+    echo "⚠️ ⚠️ ⚠️  NO PERSISTENCE  ⚠️ ⚠️ ⚠️"
+    echo ""
+    echo "    無法在開機媒體上建立 Evidence Store，證據只存在於記憶體。"
+    echo "    原因：$(cat "$NOPERSIST_FLAG" 2>/dev/null)"
+    echo "    斷電或重開機將失去本次測試的全部 Evidence。"
+    echo ""
+else
+    echo "  Evidence Store: $CRUCIBLE_LOG_DIR"
+    echo "  摘要報告:       $CRUCIBLE_REPORT_DIR"
+    echo ""
+fi
+read -rp "按 Enter 開始選碟..." _ || true
+
+# tmux 內執行；跑完保留 shell，讓操作員能繼續看結果與 log。
+tmux_cmd="tmux new-session -A -s burnin \"$CRUCIBLE_ROOT/crucible.sh; exec bash -l\""
+
+# fbterm 需要 KMS framebuffer。伺服器 BMC 顯示卡可能沒有 /dev/fb0，
+# 或是以 nomodeset 開機 —— 那就退回純 tty，中文會變方塊但仍可操作。
+if command -v fbterm >/dev/null 2>&1 && [ -c /dev/fb0 ]; then
+    exec fbterm -- bash -c "$tmux_cmd"
+fi
+echo "⚠️  fbterm 不可用 (無 /dev/fb0)，退回純文字 console，中文將顯示為方塊。"
+exec bash -c "$tmux_cmd"

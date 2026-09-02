@@ -50,6 +50,23 @@ dev_is_boot_excluded() {
     return 1
 }
 
+
+# --- No-Persistence 警告 ---
+# Evidence Store 建不起來時 (虛擬光碟開機、隨身碟無剩餘空間、分區表寫入失敗)，
+# 證據只存在於記憶體，斷電即失。3-5 天的測試中途斷電還以為證據都在，是這個
+# 降級模式唯一真正的風險 —— 因此在選碟畫面、確認前、以及最終結果都要講一次。
+NOPERSIST_FLAG="${CRUCIBLE_NOPERSIST_FLAG:-/run/crucible/no-persistence}"
+NOPERSIST_TAG=""
+[ -f "$NOPERSIST_FLAG" ] && NOPERSIST_TAG=" [無持久化]"
+
+persistence_banner() {
+    [ -f "$NOPERSIST_FLAG" ] || return 0
+    echo "=========================================================================="
+    echo "⚠️  NO PERSISTENCE：本次測試的 Evidence 只存在於記憶體 (tmpfs)"
+    echo "    原因：$(cat "$NOPERSIST_FLAG" 2>/dev/null)"
+    echo "    斷電或重開機將失去全部證據。"
+    echo "=========================================================================="
+}
 # --- TUI: 互動式硬碟選擇 (無參數時自動啟動) ---
 if [ "$#" -eq 0 ]; then
     command -v whiptail >/dev/null 2>&1 || {
@@ -134,7 +151,7 @@ if [ "$#" -eq 0 ]; then
         exit 2
     fi
 
-    selection=$(whiptail --title "NAS_CRUCIBLE 硬碟選擇" \
+    selection=$(whiptail --title "NAS_CRUCIBLE 硬碟選擇$NOPERSIST_TAG" \
         --checklist "使用方向鍵移動，空白鍵勾選/取消，Enter 確認送出" \
         20 78 "$dev_count" \
         "${checklist_args[@]}" \
@@ -157,6 +174,7 @@ fi
 echo "=========================================="
 echo "    Preflight Check (起飛前死角排查)      "
 echo "=========================================="
+persistence_banner
 
 if [ "$LIVE_MODE" = true ]; then
     if [ -n "$BOOT_MEDIUM" ]; then
@@ -323,6 +341,7 @@ if [ "$allow_count" -eq 0 ]; then
 fi
 
 echo ""
+persistence_banner
 echo "⚠️ 警告：即將對上列 $allow_count 顆硬碟執行破壞性測試。確認皆為「非線上」碟。"
 read -rp "確定抹除請輸入 YES: " confirm
 if [ "$confirm" != "YES" ]; then

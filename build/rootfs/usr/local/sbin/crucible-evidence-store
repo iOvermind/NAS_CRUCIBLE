@@ -1,0 +1,115 @@
+#!/bin/bash
+# =========================================================================
+# Evidence Store：Live 環境下讓 Evidence 撐過重開機
+#
+# live rootfs 在 RAM，而一輪燒機要跑 3-5 天，中途斷電是預期內的事。因此開機時
+# 在 Boot Medium 尾端的「未配置空間」建立兩個分區：
+#   - ext4  CRUCIBLE_DATA -> /var/lib/crucible/logs    (完整 Evidence，需要 journaling)
+#   - FAT32 CRUCIBLE_RPT  -> /var/lib/crucible/report  (人看的摘要，插到任何電腦都讀得到)
+# 已經存在就直接掛載，不重建。
+#
+# 這是全系統唯一一個「非受測碟也會被寫入」的動作，所以：
+#   1. 目標只能是 detect_boot_medium 反查到的那顆碟，反查不到就不動手；
+#   2. 只用 sgdisk 在尾端新增分區，絕不觸碰任何既有分區；
+#   3. 任何一步失敗一律降級為 No-Persistence Mode 繼續開機 —— Fail-Closed 該管的是
+#      「要不要抹這顆碟」，不該在程式還沒開始前就把使用者擋在門外。見 docs/adr/0003。
+# =========================================================================
+set -u
+
+CRUCIBLE_ROOT=${CRUCIBLE_ROOT:-/opt/nas_crucible}
+DATA_LABEL=CRUCIBLE_DATA
+RPT_LABEL=CRUCIBLE_RPT
+DATA_MNT=${CRUCIBLE_DATA_MNT:-/var/lib/crucible/logs}
+RPT_MNT=${CRUCIBLE_RPT_MNT:-/var/lib/crucible/report}
+NOPERSIST_FLAG=${CRUCIBLE_NOPERSIST_FLAG:-/run/crucible/no-persistence}
+FLAG_DIR=$(dirname "$NOPERSIST_FLAG")
+RPT_SIZE_MB=256
+MIN_FREE_MB=512
+
+# shellcheck source=/dev/null
+source "$CRUCIBLE_ROOT/lib/device_probe.sh"
+
+log() { echo "[evidence-store] $*"; }
+
+fallback_to_ram() {
+    log "降級為 No-Persistence Mode：$1"
+    mkdir -p "$DATA_MNT" "$RPT_MNT" "$FLAG_DIR"
+    mountpoint -q "$DATA_MNT" || mount -t tmpfs -o size=256m tmpfs "$DATA_MNT"
+    printf '%s\n' "$1" > "$NOPERSIST_FLAG"
+    exit 0
+}
+
+mount_by_label() { # mount_by_label <label> <mountpoint>
+    local dev
+    dev=$(blkid -L "$1" 2>/dev/null) || return 1
+    [ -n "$dev" ] || return 1
+    mount "$dev" "$2" 2>/dev/null
+}
+
+mkdir -p "$FLAG_DIR" "$DATA_MNT" "$RPT_MNT"
+rm -f "$NOPERSIST_FLAG"
+
+# --- 1. 已經存在就直接掛載 ---
+if mount_by_label "$DATA_LABEL" "$DATA_MNT"; then
+    log "掛載既有的 Evidence Store 成功"
+    mount_by_label "$RPT_LABEL" "$RPT_MNT" \
+        || log "摘要分區不存在或掛載失敗 (不影響 Evidence 保存)"
+    exit 0
+fi
+
+# --- 2. 反查 Boot Medium。反查不到就絕不動手 ---
+boot_dev=$(detect_boot_medium) \
+    || fallback_to_ram "反查不到開機媒體，不對任何裝置寫入分區表"
+disk="/dev/$boot_dev"
+[ -b "$disk" ] || fallback_to_ram "開機媒體 $disk 不是區塊裝置"
+
+for cmd in sgdisk mkfs.ext4 mkfs.vfat partx blkid; do
+    command -v "$cmd" >/dev/null 2>&1 || fallback_to_ram "缺少必要指令 $cmd"
+done
+
+# --- 3. 尾端剩餘空間是否夠用 ---
+# dd 寫入後備份 GPT 標頭還停在映像檔末端而非裝置末端，尾端空間得先讓出來。
+sgdisk -e "$disk" >/dev/null 2>&1 || fallback_to_ram "無法修正 $disk 的 GPT (可能不是 GPT 映像)"
+
+first=$(sgdisk -F "$disk" 2>/dev/null | tail -1)
+last=$(sgdisk -E "$disk" 2>/dev/null | tail -1)
+ss=$(blockdev --getss "$disk" 2>/dev/null || echo 512)
+case "$first$last" in
+    *[!0-9]*|'') fallback_to_ram "無法計算 $disk 的剩餘空間" ;;
+esac
+free_mb=$(( (last - first + 1) * ss / 1048576 ))
+log "$disk 尾端剩餘 ${free_mb}MB"
+[ "$free_mb" -ge "$MIN_FREE_MB" ] \
+    || fallback_to_ram "開機媒體剩餘空間只有 ${free_mb}MB，不足 ${MIN_FREE_MB}MB"
+
+# --- 4. 只在尾端新增兩個分區 ---
+sgdisk -n "0:0:+${RPT_SIZE_MB}M" -t 0:0700 -c "0:$RPT_LABEL" "$disk" >/dev/null 2>&1 \
+    || fallback_to_ram "建立摘要分區失敗"
+sgdisk -n "0:0:0" -t 0:8300 -c "0:$DATA_LABEL" "$disk" >/dev/null 2>&1 \
+    || fallback_to_ram "建立 Evidence 分區失敗"
+
+# 開機媒體的 ISO 分區正掛載中，整表 re-read 會 EBUSY；partx -a 走 BLKPG，
+# 只把新分區加進核心，不動既有的。
+partx -a "$disk" >/dev/null 2>&1
+command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=10 >/dev/null 2>&1
+
+rpt_part=$(lsblk -rno NAME,PARTLABEL "$disk" 2>/dev/null | awk -v l="$RPT_LABEL"  '$2==l {print "/dev/"$1; exit}')
+data_part=$(lsblk -rno NAME,PARTLABEL "$disk" 2>/dev/null | awk -v l="$DATA_LABEL" '$2==l {print "/dev/"$1; exit}')
+[ -b "${data_part:-}" ] || fallback_to_ram "新建的 Evidence 分區沒有出現在核心中"
+
+# --- 5. 建檔案系統並掛載 ---
+mkfs.ext4 -q -F -L "$DATA_LABEL" "$data_part" >/dev/null 2>&1 \
+    || fallback_to_ram "格式化 Evidence 分區失敗"
+mount "$data_part" "$DATA_MNT" \
+    || fallback_to_ram "掛載 Evidence 分區失敗"
+
+if [ -b "${rpt_part:-}" ]; then
+    if mkfs.vfat -n "$RPT_LABEL" "$rpt_part" >/dev/null 2>&1; then
+        mount "$rpt_part" "$RPT_MNT" || log "摘要分區掛載失敗 (不影響 Evidence 保存)"
+    else
+        log "摘要分區格式化失敗 (不影響 Evidence 保存)"
+    fi
+fi
+
+log "Evidence Store 就緒：$data_part -> $DATA_MNT"
+exit 0

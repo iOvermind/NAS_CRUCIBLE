@@ -76,5 +76,30 @@ apt install smartmontools e2fsprogs jq whiptail nvme-cli
 沒有「一次全開」的旗標，這是刻意的設計。非互動執行 (例如從腳本呼叫) 一律維持封鎖。
 被解除的硬碟在最終報表上會帶 `(OVERRIDE)` 標記，事後看得出來這顆碟是被強制放行的。
 
+## 製作可開機隨身碟
+
+不想動主系統、或要測的碟正掛在系統上時，可以把整套工具做成可開機的 ISO，
+插隨身碟開機直接測（BIOS 與 UEFI 都支援，開著 Secure Boot 也能開機）。
+
+```bash
+./build/build_iso.sh          # 產物在 build/out/
+```
+
+建置只需要 `docker` 與 `git`，其餘工具都在容器裡。接著寫入隨身碟：
+
+```bash
+sudo dd if=build/out/nas_crucible_<commit>_<日期>.iso of=/dev/sdX bs=4M status=progress oflag=sync
+```
+
+> 請用容量比 ISO 大至少 512MB 的隨身碟。首次開機時會自動在尾端建立兩個分區：
+> `CRUCIBLE_DATA` (ext4，存完整測試證據) 與 `CRUCIBLE_RPT` (FAT32，存摘要報告，
+> 插到 Windows / macOS 都讀得到)。
+
+開機後會自動進入選碟畫面。`Alt+F2` ~ `Alt+F6` 可切到診斷用 shell。
+
+**如果畫面上出現 `NO PERSISTENCE` 警告**，代表沒能建立證據分區（例如用 iLO/IPMI
+掛虛擬光碟開機，或隨身碟沒有剩餘空間）。測試照樣能跑，但**斷電或重開機就會失去
+全部測試紀錄**——3～5 天的測試請務必先處理這個警告。
+
 ## 開發與維護
 如需了解系統架構或進行擴充，請參閱 [DEVELOPER.md](DEVELOPER.md)。

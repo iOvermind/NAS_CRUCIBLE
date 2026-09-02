@@ -4,11 +4,13 @@ set -u
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 rc=0
 
+# live 端腳本沒有 .sh 副檔名，但同樣是 bash，同樣要語法檢查。
 echo "### 語法檢查 (bash -n)"
 while IFS= read -r f; do
     if bash -n "$f" 2>/dev/null; then printf "  ✅ %s\n" "${f#$ROOT/}"
     else printf "  ❌ %s\n" "${f#$ROOT/}"; rc=1; fi
-done < <(find "$ROOT" -name '*.sh' -not -path '*/legacy/*' -not -path '*/tests/stubs/*' | sort)
+done < <( { find "$ROOT" -name '*.sh' -not -path '*/legacy/*' -not -path '*/tests/stubs/*'
+            find "$ROOT/build/rootfs" -type f -executable 2>/dev/null; } | sort)
 
 echo
 echo "### Policy JSON 合法性"

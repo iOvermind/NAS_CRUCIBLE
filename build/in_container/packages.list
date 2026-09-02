@@ -1,0 +1,42 @@
+# =========================================================================
+# Live Image 套件清單 (單一來源)
+#   tests/test_build_contract.sh 會檢查這份清單，缺了任何一項執行期依賴，
+#   ISO 都會在實機上才炸開 —— 那時已經太晚了。
+# =========================================================================
+
+# --- 開機與 live 執行 ---
+linux-image-amd64
+live-boot
+live-config
+systemd-sysv
+kbd
+
+# --- 開機鏈：BIOS (isolinux) + UEFI (grub-efi) + Secure Boot (shim) ---
+# 用 Debian 官方簽章的 shim 與 grub，開著 Secure Boot 的機器不必進 BIOS 改設定。
+# 代價是永遠不能換成自編 kernel。見 docs/adr/0002。
+shim-signed
+grub-efi-amd64-signed
+grub-efi-amd64-bin
+isolinux
+syslinux-common
+
+# --- NAS_CRUCIBLE 執行期依賴 (DEVELOPER.md §2) ---
+smartmontools
+e2fsprogs
+nvme-cli
+jq
+whiptail
+util-linux
+tmux
+
+# --- console 中文顯示 ---
+# 純 framebuffer tty 只有數百個 glyph 的點陣字型，繁體中文一律變方塊。
+fbterm
+fonts-wqy-zenhei
+
+# --- Evidence Store 建立 ---
+gdisk
+dosfstools
+
+# --- 現場診斷 (tty2-6 用) ---
+pciutils
