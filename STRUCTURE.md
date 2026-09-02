@@ -90,3 +90,46 @@ graph TD
 1. **Admission Contract:** `crucible.sh` 產出 `device_manifest.json` 交給 Controller。
 2. **Adapter Contract:** 每個 Adapter 必定產出 `<serial>_<phase>_evidence.json`；檔名與 `<phase>` 不符會被 runner 判為 `ADAPTER_CONTRACT_VIOLATION`。
 3. **Verdict Contract:** Verdict Engine 產出標準化的 `verdict_evidence.json` 供 CLI 渲染結果。
+
+## Live 開機流程 (Bootable Burn-in Media)
+
+`build/` 把整套系統封裝成可 `dd` 進隨身碟的 hybrid ISO。核心 4 層架構在 Live 中
+原封不動執行，差別只在「誰來啟動它」與「Evidence 寫到哪裡」。
+
+```mermaid
+graph TD
+    subgraph "建置期 (宿主, 只需 docker + git)"
+        GA["git archive HEAD"] --> DK["build/in_container/build.sh<br/>(debootstrap → squashfs → xorriso)"]
+        PK[("packages.list")] --> DK
+        DK --> ISO[("nas_crucible_&lt;commit&gt;.iso<br/>isohybrid MBR + GPT")]
+    end
+
+    subgraph "開機期 (受測機器)"
+        ISO -->|dd| USB[("隨身碟")]
+        USB --> FW{"韌體"}
+        FW -->|Legacy BIOS| IL["isolinux"]
+        FW -->|UEFI / Secure Boot| SHIM["shim → grub → 官方簽章 kernel"]
+        IL --> LB["live-boot 掛載 squashfs"]
+        SHIM --> LB
+    end
+
+    subgraph "執行期"
+        LB --> ES["crucible-evidence-store.service<br/>(建立/掛載 Evidence Store)"]
+        ES -->|成功| P1[("ext4 CRUCIBLE_DATA<br/>FAT32 CRUCIBLE_RPT")]
+        ES -->|失敗| RAM[("tmpfs<br/>+ /run/crucible/no-persistence")]
+        ES --> AS["getty@tty1 autologin<br/>→ crucible-autostart"]
+        AS --> FB["fbterm (中文) → tmux"]
+        FB --> CLI["crucible.sh<br/>(核心 4 層架構，原封不動)"]
+        P1 -.->|CRUCIBLE_LOG_DIR| CLI
+        RAM -.->|CRUCIBLE_LOG_DIR| CLI
+        CLI --> RR["report_renderer.sh"]
+        RR --> RPT[("summary.csv / summary.html")]
+    end
+```
+
+Live 環境對核心架構只造成兩處實質差異，兩者都已在 admission 補上：
+
+1. **既有的三道防線同時歸零** —— 主系統沒啟動，沒有東西被掛載、沒有 pool 被匯入、
+   沒有 LVM 被組裝。改由碟上的靜態 Signature 把關。
+2. **開機媒體自己也是一顆受測候選碟** —— 由 `detect_boot_medium` 反查後硬性排除；
+   反查失敗則退化為排除全部 removable 裝置。
