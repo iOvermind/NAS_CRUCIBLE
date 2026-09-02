@@ -10,7 +10,12 @@ NAS_CRUCIBLE 是一個基於純 Bash 實作的儲存載體（SATA/SAS/NVMe）破
 - `jq` (強型別 JSON 操作)
 - `whiptail` (TUI 互動式硬碟選擇介面，Debian 預裝)
 - `nvme-cli` (提供 `nvme`，**僅測試 NVMe 裝置時必要**；缺少時 runner 會直接 Fail-Closed 退出)
-- 系統核心指令 (`lsblk`, `findmnt`, `kill`, `setsid`)
+- `procps` (提供 `ps`)。`crucible_controller.sh` 以 `ps -o pgid=` 取得 PGID 來實作
+  Global Abort，缺少時 controller 開頭的檢查直接 exit 2 —— 整個工具跑不起來。
+  Debian 的 minbase 不含 procps，這是 QEMU 端到端測試抓到的。
+- `fdisk` (提供 `sfdisk`)，僅 Live 映像的 Evidence Store 需要。Debian 13 已把
+  `sfdisk` 從 util-linux 拆到這個套件。
+- 系統核心指令 (`lsblk`, `findmnt`, `blkid`, `partx`, `kill`, `setsid`)
 
 ## 3. 日常開發與測試
 執行不需要硬體的迴歸測試（提交前必跑）：

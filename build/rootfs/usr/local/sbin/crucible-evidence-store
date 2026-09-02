@@ -63,38 +63,59 @@ boot_dev=$(detect_boot_medium) \
 disk="/dev/$boot_dev"
 [ -b "$disk" ] || fallback_to_ram "開機媒體 $disk 不是區塊裝置"
 
-for cmd in sgdisk mkfs.ext4 mkfs.vfat partx blkid; do
+for cmd in sfdisk mkfs.ext4 mkfs.vfat partx blkid blockdev; do
     command -v "$cmd" >/dev/null 2>&1 || fallback_to_ram "缺少必要指令 $cmd"
 done
 
 # --- 3. 尾端剩餘空間是否夠用 ---
-# dd 寫入後備份 GPT 標頭還停在映像檔末端而非裝置末端，尾端空間得先讓出來。
-sgdisk -e "$disk" >/dev/null 2>&1 || fallback_to_ram "無法修正 $disk 的 GPT (可能不是 GPT 映像)"
+# 不用 gdisk/sgdisk：isohybrid 映像的 MBR 第一個分割區型別是 0x00，gdisk 判定為
+# 「Invalid partition data!」而完全讀不進來 (QEMU 端到端測試實測)。核心對這種
+# 映像認的本來就是 MBR (fdisk 顯示 Disklabel type: dos)，因此直接用 sfdisk
+# 在尾端「追加」分割區 —— 既有的分割區完全不會被改寫。
+table=$(sfdisk -d "$disk" 2>/dev/null) || fallback_to_ram "讀不到 $disk 的分割表"
+label=$(printf '%s\n' "$table" | awk -F': *' '/^label:/{print $2; exit}')
+used=$(printf '%s\n' "$table" | grep -c 'start=')
 
-first=$(sgdisk -F "$disk" 2>/dev/null | tail -1)
-last=$(sgdisk -E "$disk" 2>/dev/null | tail -1)
-ss=$(blockdev --getss "$disk" 2>/dev/null || echo 512)
-case "$first$last" in
-    *[!0-9]*|'') fallback_to_ram "無法計算 $disk 的剩餘空間" ;;
-esac
-free_mb=$(( (last - first + 1) * ss / 1048576 ))
+# MBR 只有四個 primary slot。放不下兩個新分區就不要動手。
+if [ "$label" != gpt ] && [ "$used" -gt 2 ]; then
+    fallback_to_ram "MBR 分割區已用掉 $used 個，容不下 Evidence Store"
+fi
+
+ss=$(blockdev --getss "$disk" 2>/dev/null) || ss=512
+bytes=$(blockdev --getsize64 "$disk" 2>/dev/null) || fallback_to_ram "讀不到 $disk 的容量"
+total=$(( bytes / ss ))
+last=$(printf '%s\n' "$table" | awk -F'[=,]' '/start=/{s=$2+0; z=$4+0; if (s+z>m) m=s+z} END{print m+0}')
+align=$(( 1048576 / ss ))
+start=$(( (last + align - 1) / align * align ))
+[ "$total" -gt "$start" ] || fallback_to_ram "開機媒體尾端沒有剩餘空間"
+free_mb=$(( (total - start) * ss / 1048576 ))
 log "$disk 尾端剩餘 ${free_mb}MB"
 [ "$free_mb" -ge "$MIN_FREE_MB" ] \
     || fallback_to_ram "開機媒體剩餘空間只有 ${free_mb}MB，不足 ${MIN_FREE_MB}MB"
 
-# --- 4. 只在尾端新增兩個分區 ---
-sgdisk -n "0:0:+${RPT_SIZE_MB}M" -t 0:0700 -c "0:$RPT_LABEL" "$disk" >/dev/null 2>&1 \
-    || fallback_to_ram "建立摘要分區失敗"
-sgdisk -n "0:0:0" -t 0:8300 -c "0:$DATA_LABEL" "$disk" >/dev/null 2>&1 \
-    || fallback_to_ram "建立 Evidence 分區失敗"
+# --- 4. 只在尾端追加兩個分區 ---
+if [ "$label" = gpt ]; then
+    rpt_type=EBD0A0A2-B9E5-4433-87C0-68B6B72699C7   # Microsoft basic data
+    data_type=0FC63DAF-8483-4772-8E79-3D69D8477DE4  # Linux filesystem
+else
+    rpt_type=c    # W95 FAT32 (LBA)
+    data_type=83  # Linux
+fi
+rpt_sectors=$(( RPT_SIZE_MB * 1048576 / ss ))
+
+printf 'start=%s, size=%s, type=%s\nstart=%s, type=%s\n' \
+    "$start" "$rpt_sectors" "$rpt_type" "$(( start + rpt_sectors ))" "$data_type" \
+  | sfdisk --append --no-reread "$disk" >/dev/null 2>&1 \
+  || fallback_to_ram "在 $disk 尾端追加分割區失敗"
 
 # 開機媒體的 ISO 分區正掛載中，整表 re-read 會 EBUSY；partx -a 走 BLKPG，
-# 只把新分區加進核心，不動既有的。
+# 只把新分區加進核心，不動既有的 (對既存分區回報忙碌是預期的，忽略)。
 partx -a "$disk" >/dev/null 2>&1
 command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=10 >/dev/null 2>&1
 
-rpt_part=$(lsblk -rno NAME,PARTLABEL "$disk" 2>/dev/null | awk -v l="$RPT_LABEL"  '$2==l {print "/dev/"$1; exit}')
-data_part=$(lsblk -rno NAME,PARTLABEL "$disk" 2>/dev/null | awk -v l="$DATA_LABEL" '$2==l {print "/dev/"$1; exit}')
+new_table=$(sfdisk -d "$disk" 2>/dev/null)
+rpt_part=$(printf '%s\n' "$new_table" | awk '/start=/{print $1}' | tail -2 | head -1)
+data_part=$(printf '%s\n' "$new_table" | awk '/start=/{print $1}' | tail -1)
 [ -b "${data_part:-}" ] || fallback_to_ram "新建的 Evidence 分區沒有出現在核心中"
 
 # --- 5. 建檔案系統並掛載 ---

@@ -114,11 +114,13 @@ boot_vm() { # boot_vm <log 檔> <firmware 參數...>
         -serial "tcp:127.0.0.1:$PORT,server=on,wait=on" \
         >"$LOG.qemu" 2>&1 &
     QPID=$!
+    # 注意 2>/dev/null 要掛在迴圈上，不能掛在 exec 上：exec 一旦成功，
+    # 那個重導向會套用到整個 shell，之後所有 stderr 都會被吞掉。
     local i
     for i in $(seq 1 100); do
-        exec 3<>"/dev/tcp/127.0.0.1/$PORT" 2>/dev/null && { SERIAL_FD_OPEN=true; break; }
+        if exec 3<>"/dev/tcp/127.0.0.1/$PORT"; then SERIAL_FD_OPEN=true; break; fi
         sleep 0.2
-    done
+    done 2>/dev/null
     [ "$SERIAL_FD_OPEN" = true ] || { echo "  (無法連上 QEMU 序列埠)"; return 1; }
     cat <&3 >>"$LOG" &
 }
@@ -157,12 +159,19 @@ shell_alive() {
     wait_for "CRUCIBLE_SHELL_OK_$1" 120
 }
 
+# BOOTMARK 出現時 serial-getty 通常還沒登入完，這時送出去的指令會被 login
+# 程序吃掉而不是交給 shell。先等提示字元出現再說話。
+wait_shell() {
+    wait_for "root@nas-crucible" 180 || return 1
+    shell_alive "$1"
+}
+
 # ============================================ 1. Legacy BIOS 開機路徑 ==
 echo "== Legacy BIOS (SeaBIOS) =="
 boot_vm "$WORK/bios.log"
 wait_for "$BOOTMARK" "$BOOT_TIMEOUT"
 check "isohybrid MBR 可由 BIOS 開機並進到 userspace" "$?"
-shell_alive bios
+wait_shell bios
 check "序列埠取得可用的 root shell" "$?"
 send "pgrep -f crucible-autostart >/dev/null && echo AUTOSTART\"\"_RUNNING"
 wait_for "AUTOSTART_RUNNING" 60
@@ -190,7 +199,7 @@ boot_vm "$WORK/uefi.log" \
     -drive "if=pflash,format=raw,unit=1,file=$WORK/vars.fd"
 wait_for "$BOOTMARK" "$BOOT_TIMEOUT"
 check "isohybrid GPT 可由 UEFI 開機並進到 userspace" "$?"
-shell_alive uefi
+wait_shell uefi
 check "UEFI 開機後序列埠取得可用的 root shell" "$?"
 stop_vm
 
@@ -216,7 +225,7 @@ fi
 echo
 echo "== Admission (5 類分類 / 開機碟排除 / Signature) =="
 boot_vm "$WORK/adm.log"
-if wait_for "$BOOTMARK" "$BOOT_TIMEOUT" && shell_alive adm; then
+if wait_for "$BOOTMARK" "$BOOT_TIMEOUT" && wait_shell adm; then
     # serial-getty 已設為自動登入，這裡直接就是 root shell。
     # crucible.sh 的 tmux 防呆以 TMUX=1 滿足 —— 序列埠上沒有 SSH 斷線風險。
     send "export TMUX=1 CRUCIBLE_LOG_DIR=/tmp/adm"

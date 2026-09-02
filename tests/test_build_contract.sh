@@ -32,11 +32,14 @@ done
 echo
 echo "== 套件清單涵蓋所有執行期依賴 =="
 # 少了任何一項，ISO 都會在實機上才炸開。對照 DEVELOPER.md §2。
-for p in smartmontools e2fsprogs nvme-cli jq whiptail util-linux tmux \
+# procps 與 fdisk 是 QEMU 端到端測試抓到的漏網之魚：
+#   - crucible_controller.sh 開頭檢查 ps，缺了它整個工具在 ISO 裡直接 exit 2
+#   - Debian 13 把 sfdisk 從 util-linux 拆到 fdisk 套件
+for p in smartmontools e2fsprogs nvme-cli jq whiptail util-linux tmux procps \
          linux-image-amd64 live-boot \
          shim-signed grub-efi-amd64-signed isolinux \
          fbterm fonts-wqy-zenhei \
-         gdisk dosfstools; do
+         fdisk dosfstools; do
     check "packages.list 含 $p" \
       "$(grep -qxF "$p" "$B/in_container/packages.list"; echo $?)"
 done
@@ -107,11 +110,15 @@ check "反查失敗時不寫任何分區表 (降級為 RAM)" \
 bad=0
 while IFS= read -r line; do
     case "$line" in
-        *'"$disk"'*|*'"$data_part"'*|*'"$rpt_part"'*|*'sgdisk()'*) ;;
+        *'"$disk"'*|*'"$data_part"'*|*'"$rpt_part"'*) ;;
         *) bad=1; echo "      可疑的寫入目標: $line" ;;
     esac
-done < <(grep -nE '^\s*(sgdisk|mkfs\.[a-z0-9]+) ' "$ES" | grep -v '^\s*#')
-check "所有 sgdisk / mkfs 的目標都來自反查到的開機碟" "$bad"
+done < <(grep -nE '(sfdisk|sgdisk|mkfs\.[a-z0-9]+) ' "$ES" | grep -vE '^[0-9]+:\s*#|command -v|for cmd in')
+check "所有 sfdisk / mkfs 的目標都來自反查到的開機碟" "$bad"
+# gdisk 讀不了 isohybrid 的分割表 (MBR 第一個分割區 type=0x00)，這是實測結論，
+# 不要再換回去。
+check "不使用 sgdisk 分割開機媒體" \
+      "$(! grep -qE '^\s*sgdisk ' "$ES"; echo $?)"
 check "格式化前確認分區真的出現在核心中" "$(has "$ES" '[ -b "${data_part:-}" ]'; echo $?)"
 check "尾端空間不足時降級而非硬幹" "$(has "$ES" 'MIN_FREE_MB'; echo $?)"
 check "Evidence 分區用 ext4 (3-5 天連續寫入需要 journaling)" \

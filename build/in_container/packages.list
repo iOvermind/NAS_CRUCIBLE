@@ -28,6 +28,10 @@ jq
 whiptail
 util-linux
 tmux
+# ps 是 crucible_controller.sh 的硬性依賴 (ps -o pgid= 取 PGID 做 Global Abort)，
+# 缺了它 controller 開頭的檢查就 exit 2，整個工具在 ISO 裡完全跑不起來。
+# minbase 不含 procps —— 這是 QEMU 端到端測試抓到的。
+procps
 
 # --- console 中文顯示 ---
 # 純 framebuffer tty 只有數百個 glyph 的點陣字型，繁體中文一律變方塊。
@@ -35,7 +39,10 @@ fbterm
 fonts-wqy-zenhei
 
 # --- Evidence Store 建立 ---
-gdisk
+# Debian 13 把 sfdisk / fdisk 從 util-linux 拆到 fdisk 這個套件。
+# 不用 gdisk：isohybrid 映像的 MBR 第一個分割區型別是 0x00，gdisk 判為
+# 「Invalid partition data!」而完全讀不進來 (實測)。
+fdisk
 dosfstools
 
 # --- 現場診斷 (tty2-6 用) ---
