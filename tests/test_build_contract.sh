@@ -69,6 +69,8 @@ check "grub 使用官方簽章版 grubx64.efi.signed" \
 check "附上 mmx64 (MOK Manager)" "$(has "$B/in_container/build.sh" 'mmx64'; echo $?)"
 check "簽章 grub 的 prefix /EFI/debian 有放設定檔" \
       "$(has "$B/in_container/build.sh" 'EFI/debian'; echo $?)"
+check "EFI 樹同時放進 ISO 檔案系統 (部分韌體只掃 ISO9660 的 /EFI/BOOT)" \
+      "$(grep -q 'cp -a "\$WORK/efi/EFI" "\$ISO_TREE/EFI"' "$B/in_container/build.sh"; echo $?)"
 
 echo
 echo "== 可追溯性 =="

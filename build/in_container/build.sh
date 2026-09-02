@@ -142,6 +142,11 @@ efi_kb=$(( ($(du -sk "$WORK/efi" | cut -f1) + 1024) * 2 ))
 mkfs.vfat -C "$ISO_TREE/boot/efi.img" "$efi_kb" >/dev/null
 mcopy -s -i "$ISO_TREE/boot/efi.img" "$WORK/efi/EFI" ::
 
+# 同一份 EFI 樹也放進 ISO 檔案系統：dd 到隨身碟時 UEFI 走的是 GPT 上的 ESP
+# (也就是上面那個 efi.img)，但有些韌體會改去掃 ISO9660 裡的 /EFI/BOOT，
+# 而「把 ISO 內容複製到 FAT 隨身碟」這種用法也只找得到這裡。
+cp -a "$WORK/efi/EFI" "$ISO_TREE/EFI"
+
 # --- 8. Hybrid ISO ------------------------------------------------------
 step "產生 hybrid ISO"
 mkdir -p "$ISO_TREE/.disk"
